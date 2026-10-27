@@ -26,7 +26,7 @@ python -m venv tutor/.venv        # set up the module
 source tutor/.venv/bin/activate
 pip install -r tutor/requirements.txt
 
-python -m tutor.cli               # talk to the tutor
+python -m tutor.cli --lang ru     # talk to the tutor (ru, fr or ja)
 ```
 
 ```
@@ -34,6 +34,33 @@ python -m tutor.cli               # talk to the tutor
 Almost — it should be "Я читаю книгу". Here книга is the direct object, so it
 takes the accusative case (книга → книгу). Что ты любишь читать?
 ```
+
+## Wake the PC
+
+`prada wake` sends a Wake-on-LAN magic packet (standard library only) from any machine on your LAN. Enable Wake-on-LAN in the PC's BIOS and network adapter, and prefer a wired connection.
+
+```bash
+pip install -e .
+prada wake --mac aa:bb:cc:dd:ee:ff --broadcast 192.168.1.255
+```
+
+Settings come from the command line, then `PRADA_WAKE_MAC` / `PRADA_WAKE_BROADCAST` / `PRADA_WAKE_PORT`, then `~/.config/prada/config.toml` (or `$PRADA_CONFIG`):
+
+```toml
+[wake]
+mac = "aa:bb:cc:dd:ee:ff"
+broadcast = "192.168.1.255"
+```
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+ruff check . && ruff format --check . && python -m pytest
+echo "Я читаю книгу." | PRADA_FAKE_LLM=1 python -m tutor.cli
+```
+
+`PRADA_FAKE_LLM=1` swaps Ollama for a canned client, so tests and smoke runs never need a model.
 
 ## Roadmap
 
