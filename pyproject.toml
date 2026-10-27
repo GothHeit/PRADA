@@ -18,6 +18,9 @@ prada = "prada.cli:main"
 [tool.setuptools]
 packages = ["prada", "tutor"]
 
+[tool.setuptools.package-data]
+tutor = ["evalset/*.jsonl"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

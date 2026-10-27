@@ -62,6 +62,10 @@ echo "Я читаю книгу." | PRADA_FAKE_LLM=1 python -m tutor.cli
 
 `PRADA_FAKE_LLM=1` swaps Ollama for a canned client, so tests and smoke runs never need a model.
 
+## Eval
+
+`prada eval [--lang ru]` runs the tutor over the labeled sentences in `tutor/evalset/` and prints verdict, error-category and correction accuracy per language. Run it against the real model before and after a prompt or model change; with `PRADA_FAKE_LLM=1` it only checks the plumbing.
+
 ## Roadmap
 
 - Corrector → **interlocutor**: respond to *meaning*, not just grade the form

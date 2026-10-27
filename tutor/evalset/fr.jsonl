@@ -1,0 +1,12 @@
+{"text": "Je lis un livre.", "is_correct": true}
+{"text": "Hier, nous sommes allés au marché.", "is_correct": true}
+{"text": "J'aime beaucoup la musique française.", "is_correct": true}
+{"text": "Elle est très content.", "is_correct": false, "error_type": "agreement", "correction": "Elle est très contente."}
+{"text": "Je mange une pomme rouge et un orange.", "is_correct": false, "error_type": "article", "correction": "Je mange une pomme rouge et une orange."}
+{"text": "Nous mangeons du pain tous les jours, hier nous mangeons du fromage.", "is_correct": false, "error_type": "tense_mood", "correction": "Nous mangeons du pain tous les jours, hier nous avons mangé du fromage."}
+{"text": "Si j'aurais de l'argent, j'achèterais une maison.", "is_correct": false, "error_type": "tense_mood", "correction": "Si j'avais de l'argent, j'achèterais une maison."}
+{"text": "Je vais à le cinéma ce soir.", "is_correct": false, "error_type": "preposition", "correction": "Je vais au cinéma ce soir."}
+{"text": "Je lui vois tous les jours.", "is_correct": false, "error_type": "pronoun", "correction": "Je le vois tous les jours."}
+{"text": "J'ai acheté une voiture rouge petite.", "is_correct": false, "error_type": "word_order", "correction": "J'ai acheté une petite voiture rouge."}
+{"text": "Il fait beau aujourd'hui.", "is_correct": true}
+{"text": "Je suis allé a la plage hier.", "is_correct": false, "error_type": "spelling", "correction": "Je suis allé à la plage hier."}

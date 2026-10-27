@@ -1,5 +1,4 @@
 import argparse
-import os
 import sqlite3
 import sys
 
@@ -22,8 +21,6 @@ def show_stats(lang: str | None = None) -> None:
 
 
 def run(lang: str) -> None:
-    if os.environ.get("PRADA_FAKE_LLM"):
-        print("tutor: PRADA_FAKE_LLM is set, using the canned offline client", file=sys.stderr)
     history = []
     try:
         db = memory.open_memory()

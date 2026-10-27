@@ -1,0 +1,12 @@
+{"text": "Я читаю книгу.", "is_correct": true}
+{"text": "Я люблю читать русские книги.", "is_correct": true}
+{"text": "Вчера я ходил в магазин и купил хлеб.", "is_correct": true}
+{"text": "Я читаю книга.", "is_correct": false, "error_type": "case", "correction": "Я читаю книгу."}
+{"text": "Я живу в Москву.", "is_correct": false, "error_type": "case", "correction": "Я живу в Москве."}
+{"text": "Каждый день я прочитал одну главу.", "is_correct": false, "error_type": "aspect", "correction": "Каждый день я читал одну главу."}
+{"text": "Каждый день я иду в университет на машине.", "is_correct": false, "error_type": "motion_verb", "correction": "Каждый день я езжу в университет на машине."}
+{"text": "Это красивый книга.", "is_correct": false, "error_type": "agreement", "correction": "Это красивая книга."}
+{"text": "Я смотрю радио каждый вечер.", "is_correct": false, "error_type": "lexical", "correction": "Я слушаю радио каждый вечер."}
+{"text": "Она говорят по-русски.", "is_correct": false, "error_type": "conjugation", "correction": "Она говорит по-русски."}
+{"text": "Я хочу пить воду.", "is_correct": true}
+{"text": "Спасибо, пожалуста.", "is_correct": false, "error_type": "spelling", "correction": "Спасибо, пожалуйста."}

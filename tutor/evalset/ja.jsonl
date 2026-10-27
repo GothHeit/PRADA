@@ -1,0 +1,12 @@
+{"text": "私は本を読みます。", "is_correct": true}
+{"text": "昨日、友達と映画を見ました。", "is_correct": true}
+{"text": "毎日、日本語を勉強しています。", "is_correct": true}
+{"text": "私は本が読みます。", "is_correct": false, "error_type": "particle", "correction": "私は本を読みます。"}
+{"text": "昨日、友達と映画を見る。", "is_correct": false, "error_type": "conjugation", "correction": "昨日、友達と映画を見た。"}
+{"text": "先生、何を食べますか。", "is_correct": false, "error_type": "politeness", "correction": "先生、何を召し上がりますか。"}
+{"text": "りんごを三個ください。", "is_correct": true}
+{"text": "猫を二人飼っています。", "is_correct": false, "error_type": "counter", "correction": "猫を二匹飼っています。"}
+{"text": "公園で犬と散歩を私はしました。", "is_correct": true}
+{"text": "わたしはがくせいです。", "is_correct": true}
+{"text": "この本は高いでした。", "is_correct": false, "error_type": "conjugation", "correction": "この本は高かったです。"}
+{"text": "私は水を食べます。", "is_correct": false, "error_type": "lexical", "correction": "私は水を飲みます。"}

@@ -22,6 +22,11 @@ def main(argv: list[str] | None = None) -> int:
     stats = tutor_sub.add_parser("stats", help="show your logged practice, errors by category")
     stats.add_argument("--lang", dest="stats_lang", choices=sorted(LANGUAGES), help="one language")
 
+    evaluate = sub.add_parser("eval", help="score the tutor on the labeled eval set")
+    from tutor.eval import add_arguments as add_eval_arguments
+
+    add_eval_arguments(evaluate)
+
     args = parser.parse_args(argv)
     if args.command == "wake":
         try:
@@ -31,6 +36,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"prada: {e}", file=sys.stderr)
             return 1
         print(f"Magic packet sent to {s['mac']} via {s['broadcast']}:{s['port']}")
+    elif args.command == "eval":
+        from tutor.eval import run as run_eval
+
+        run_eval(args.lang)
     elif args.tutor_command == "stats":
         from tutor.cli import show_stats
 
