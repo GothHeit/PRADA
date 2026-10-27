@@ -1,0 +1,68 @@
+name: Clean up merged branches
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: List branches without deleting them
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cleanup-branches
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Delete merged branches
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          MIN_AGE_SECONDS: 3600
+        run: |
+          set -euo pipefail
+          now=$(date +%s)
+          # True when merging $2 into commit $1 leaves $1's tree unchanged.
+          contains() {
+            local tree
+            tree=$(git merge-tree --write-tree "$1" "$2" 2>/dev/null) || return 1
+            [ "$(echo "$tree" | head -n1)" = "$(git rev-parse "$1^{tree}")" ]
+          }
+          git for-each-ref --format='%(refname:strip=3)' refs/remotes/origin | while read -r branch; do
+            case "$branch" in main|HEAD) continue ;; esac
+            ref="origin/$branch"
+            age=$(( now - $(git log -1 --format=%ct "$ref") ))
+            if [ "$age" -lt "$MIN_AGE_SECONDS" ]; then
+              echo "keep   $branch (last commit under an hour old)"
+              continue
+            fi
+            # Merged means some main commit since the branch forked already held all its
+            # changes, even if main changed those lines later. Squash merges count too.
+            base=$(git merge-base origin/main "$ref") || base=""
+            merged=false
+            if [ -n "$base" ]; then
+              for c in $(git rev-list --first-parent "$base"..origin/main) "$base"; do
+                if contains "$c" "$ref"; then merged=true; break; fi
+              done
+            fi
+            if [ "$merged" = "true" ]; then
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "would delete $branch"
+              else
+                echo "delete $branch"
+                git push origin --delete "refs/heads/$branch" || echo "failed to delete $branch"
+              fi
+            else
+              echo "keep   $branch (not merged)"
+            fi
+          done
