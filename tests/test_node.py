@@ -1,10 +1,12 @@
 import json
+import re
 import socket
 import threading
 
 import pytest
 
 from prada import client, config, router
+from prada.assistant import AssistantModule
 from prada.cli import main
 from prada.module import Context, Module, Reply, Request
 from prada.node import Node
@@ -333,3 +335,26 @@ def test_cli_health_no_node(capsys):
         free = s.getsockname()[1]  # closed again before the probe: nothing listens there
     assert main(["health", "--port", str(free)]) == 1
     assert "no node answering" in capsys.readouterr().err
+
+
+def test_persona_is_shared_by_assistant_wake_and_tutor(monkeypatch):
+    from prada import persona
+    from tutor.languages import get_language
+    from tutor.prompts import build_system_prompt
+
+    seen = []
+
+    def chat(messages, schema, model=None):
+        seen.append(messages[0]["content"])
+        return '{"reply": "hi"}'
+
+    AssistantModule().handle(Request(text="hello"), Context(chat=chat))
+    assert seen[0].startswith(persona.CHARACTER)
+
+    monkeypatch.setattr("prada.wol.send_magic_packet", lambda *a: None)
+    monkeypatch.setenv("PRADA_WAKE_MAC", "aa:bb:cc:dd:ee:ff")
+    reply = Node([WakeModule()]).handle(Request(text="wake up"))
+    assert reply.text == persona.waking("aa:bb:cc:dd:ee:ff")
+
+    prompt = build_system_prompt(get_language("fr"))
+    assert persona.TONE in prompt and not re.search(r"\{\w+\}", prompt)

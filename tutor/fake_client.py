@@ -8,7 +8,7 @@ from tutor.languages import LANGUAGES
 
 def chat(messages, schema, model=None) -> str:
     system = messages[0]["content"]
-    name = re.search(r"You are a (\w+) language tutor", system).group(1)
+    name = re.search(r"acting as a (\w+) language tutor", system).group(1)
     language = next(lang for lang in LANGUAGES.values() if lang.name == name)
     student = messages[-1]["content"]
     question = language.sample_question
