@@ -8,6 +8,7 @@ runs never reach a real node or model.
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -67,6 +68,14 @@ def ping(url: str, timeout: float = 0.5) -> list[str] | None:
             return json.load(response)["modules"]
     except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError):
         return None
+
+
+def wait_for_node(url: str, seconds: float = 0) -> list[str] | None:
+    """Like `ping`, but keeps trying for up to `seconds` (a node that is still starting)."""
+    deadline = time.monotonic() + seconds
+    while (modules := ping(url)) is None and time.monotonic() < deadline:
+        time.sleep(0.5)
+    return modules
 
 
 def connect(port: int | None = None) -> LocalSession | RemoteSession:

@@ -20,6 +20,10 @@ def main(argv: list[str] | None = None) -> int:
     node = sub.add_parser("node", help="run the home node that hosts the modules (localhost)")
     node.add_argument("--port", type=int, help="port to listen on (default 7723)")
 
+    health = sub.add_parser("health", help="check that the home node answers (exit 1 if not)")
+    health.add_argument("--port", type=int, help="home node port (default 7723)")
+    health.add_argument("--wait", type=float, default=0, help="keep trying for this many seconds")
+
     tutor = sub.add_parser("tutor", help="practice a language with the offline tutor")
     from tutor.cli import add_arguments
 
@@ -54,6 +58,19 @@ def main(argv: list[str] | None = None) -> int:
         except (ValueError, OSError) as e:
             print(f"prada: {e}", file=sys.stderr)
             return 1
+    elif args.command == "health":
+        from prada import client
+
+        try:
+            url = client.node_url(args.port)
+        except ValueError as e:
+            print(f"prada: {e}", file=sys.stderr)
+            return 1
+        modules = client.wait_for_node(url, args.wait)
+        if modules is None:
+            print(f"prada: no node answering at {url}", file=sys.stderr)
+            return 1
+        print(f"PRADA node up at {url} (modules: {', '.join(modules)})")
     elif args.command == "eval":
         from tutor.eval import run as run_eval
 

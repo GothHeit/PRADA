@@ -16,6 +16,19 @@ prada tutor       # talk to the tutor directly
 
 The node keeps the model loaded between requests, and the CLI is a thin client of it. If no node is running the CLI works in-process instead, so every command also works on its own. Write `/tutor ...` or `/wake` in `prada chat` to skip the router. The port comes from `--port`, `PRADA_NODE_PORT` or `[node] port` in the config file.
 
+## Start at Windows login
+
+On a Windows PC the brain (`prada node` and Ollama) lives in WSL, and a Task Scheduler task starts it each time you log in, with no window. Set up the repo in WSL first (a `.venv` or `tutor/.venv` with the requirements installed), then, from an elevated PowerShell:
+
+```powershell
+cd \\wsl$\Ubuntu\home\you\projetos\PRADA\windows
+powershell -ExecutionPolicy Bypass -File .\install-autostart.ps1   # register the task and start it now
+powershell -ExecutionPolicy Bypass -File .\check-node.ps1          # is the node up on 127.0.0.1:7723?
+powershell -ExecutionPolicy Bypass -File .\uninstall-autostart.ps1 # remove the task and stop the node
+```
+
+Run from a `\\wsl$` path, the install script works out the distro and repo path itself; otherwise pass `-Distro Ubuntu -RepoPath /home/you/projetos/PRADA`. `-Port` changes the port. The task runs `scripts/start-node.sh`, which starts Ollama if it isn't already running and then the node; logs go to `~/.local/share/prada/node.log` and `ollama.log` in WSL. Inside WSL, `prada health [--wait 30]` does the same check as `check-node.ps1`. Windows reaches the node through WSL's localhost forwarding (on by default). Microphone and speakers will run on the Windows side later, talking to this node.
+
 ## Modules
 
 ### Tutor — offline language tutor

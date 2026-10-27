@@ -1,4 +1,5 @@
 import json
+import socket
 import threading
 
 import pytest
@@ -318,3 +319,17 @@ def test_tutor_prompt_lists_categories_only_where_defined():
     assert "tense_mood:" in build_system_prompt(get_language("fr"))
     assert "counter:" in build_system_prompt(get_language("ja"))
     assert "Choose error_type" not in build_system_prompt(get_language("ru"))
+
+
+def test_cli_health(served, capsys):
+    port = served.rsplit(":", 1)[1]
+    assert main(["health", "--port", port]) == 0
+    assert "PRADA node up" in capsys.readouterr().out
+
+
+def test_cli_health_no_node(capsys):
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        free = s.getsockname()[1]  # closed again before the probe: nothing listens there
+    assert main(["health", "--port", str(free)]) == 1
+    assert "no node answering" in capsys.readouterr().err
