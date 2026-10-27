@@ -354,7 +354,35 @@ def test_persona_is_shared_by_assistant_wake_and_tutor(monkeypatch):
     monkeypatch.setattr("prada.wol.send_magic_packet", lambda *a: None)
     monkeypatch.setenv("PRADA_WAKE_MAC", "aa:bb:cc:dd:ee:ff")
     reply = Node([WakeModule()]).handle(Request(text="wake up"))
-    assert reply.text == persona.waking("aa:bb:cc:dd:ee:ff")
+    assert reply.text == persona.waking()
 
     prompt = build_system_prompt(get_language("fr"))
     assert persona.TONE in prompt and not re.search(r"\{\w+\}", prompt)
+
+
+def test_remote_session_reports_http_errors(served):
+    with pytest.raises(client.NodeError, match="refused the request.*404: not found"):
+        client.RemoteSession(served + "/elsewhere").send("hi", "echo")
+
+
+def test_request_from_a_client_that_hung_up_is_dropped(node, served):
+    port = int(served.rsplit(":", 1)[1])
+    body = b'{"text": "late", "module": "echo"}'
+    with node._lock:  # the node is busy with someone else's request
+        sock = socket.create_connection(("127.0.0.1", port))
+        sock.sendall(
+            b"POST /v1/request HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n"
+            b"Content-Type: application/json\r\nContent-Length: %d\r\n\r\n%s"
+            % (port, len(body), body)
+        )
+        threading.Event().wait(0.3)  # the server has read the request and waits on the lock
+        sock.close()
+    threading.Event().wait(0.3)  # the server takes the lock, sees the hang-up, drops it
+    assert node.handle(Request(text="next", module="echo")).error is None
+    seen = node._dbs["echo"].execute("SELECT text FROM echo_seen").fetchall()
+    assert [tuple(row) for row in seen] == [("next",)]
+
+
+def test_node_skips_requests_nobody_waits_for(node):
+    reply = node.handle(Request(text="x", module="echo"), gone=lambda: True)
+    assert "went away" in reply.error and "echo" not in node._dbs

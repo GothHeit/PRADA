@@ -24,6 +24,13 @@ def main(argv: list[str] | None = None) -> int:
     health.add_argument("--port", type=int, help="home node port (default 7723)")
     health.add_argument("--wait", type=float, default=0, help="keep trying for this many seconds")
 
+    voice = sub.add_parser("voice", help="talk to PRADA out loud: wake word, then speak")
+    voice.add_argument("--port", type=int, help="home node port (default 7723)")
+    voice.add_argument("--once", action="store_true", help="stop after one reply")
+    voice_sub = voice.add_subparsers(dest="voice_command")
+    voice_sub.add_parser("setup", help="download the wake word, speech and voice models")
+    voice_sub.add_parser("devices", help="list microphones and speakers")
+
     tutor = sub.add_parser("tutor", help="practice a language with the offline tutor")
     from tutor.cli import add_arguments
 
@@ -71,6 +78,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"prada: no node answering at {url}", file=sys.stderr)
             return 1
         print(f"PRADA node up at {url} (modules: {', '.join(modules)})")
+    elif args.command == "voice":
+        return _voice(args)
     elif args.command == "eval":
         from tutor.eval import run as run_eval
 
@@ -84,6 +93,48 @@ def main(argv: list[str] | None = None) -> int:
 
         return run(args.lang or "ru")
     return 0
+
+
+def _voice(args) -> int:
+    from prada import client, llm
+    from prada.voice.loop import run
+
+    if llm.fake_enabled() and args.voice_command is None:
+        from prada.voice.fake import TextEars, TextMouth
+
+        return run(client.connect(args.port), TextEars(), TextMouth(), args.once)
+    try:
+        settings = config.voice_settings()
+    except ValueError as e:
+        print(f"prada: {e}", file=sys.stderr)
+        return 1
+    from prada.voice import devices
+
+    try:
+        if args.voice_command == "setup":
+            devices.setup(settings)
+            return 0
+        if args.voice_command == "devices":
+            print(devices.list_devices())
+            return 0
+        # Always the node: the voice side (e.g. Windows) has no model of its own.
+        session = client.RemoteSession(client.node_url(args.port))
+        ears, mouth = devices.build(settings)
+    except ImportError as e:
+        print(f'prada: voice needs `pip install "prada[voice]"` ({e})', file=sys.stderr)
+        return 1
+    except devices.errors() as e:
+        print(f"prada: {e}", file=sys.stderr)
+        return 1
+    words = ", ".join(settings.wake_words)
+    print(f"PRADA is listening for: {words} (Ctrl+C to stop)", file=sys.stderr)
+    try:
+        return run(session, ears, mouth, args.once)
+    except KeyboardInterrupt:
+        return 0
+    except devices.errors() as e:
+        print(f"prada: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

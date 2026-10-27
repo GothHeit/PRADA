@@ -9,6 +9,8 @@ name 127.0.0.1 or localhost, so a DNS-rebinding page can't pass as same-origin.
 """
 
 import json
+import select
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from pydantic import ValidationError
@@ -23,6 +25,7 @@ MAX_BODY = 1 << 20
 class _Handler(BaseHTTPRequestHandler):
     node: Node  # set by make_server
     timeout = 30  # seconds a client may stall before its thread is freed
+    hung_up = False
 
     def _host_ok(self) -> bool:
         port = self.server.server_port
@@ -55,7 +58,21 @@ class _Handler(BaseHTTPRequestHandler):
             request = Request.model_validate_json(self.rfile.read(length))
         except ValidationError as e:
             return self._send(400, {"error": f"bad request: {e.error_count()} invalid field(s)"})
-        self._send(200, self.node.handle(request).model_dump(mode="json"))
+        reply = self.node.handle(request, self._client_gone)
+        if not self.hung_up:
+            self._send(200, reply.model_dump(mode="json"))
+
+    def _client_gone(self) -> bool:
+        """True if the client hung up while its request waited (it has nothing left to send,
+        so a readable socket with no data means the connection was closed)."""
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            self.hung_up = bool(readable) and not self.connection.recv(1, socket.MSG_PEEK)
+        except OSError:
+            self.hung_up = True
+        if self.hung_up:
+            self.close_connection = True
+        return self.hung_up
 
     def _send(self, status: int, body: dict) -> None:
         data = json.dumps(body, ensure_ascii=False).encode()

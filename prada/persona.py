@@ -14,5 +14,5 @@ def system_prompt(task: str) -> str:
     return f"{CHARACTER}\n\n{task}"
 
 
-def waking(mac: str) -> str:
-    return f"Okay, waking your PC up for you ({mac}). Give it a moment to stretch."
+def waking() -> str:
+    return "Okay, waking your PC up for you. Give it a moment to stretch."

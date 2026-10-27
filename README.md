@@ -18,7 +18,7 @@ The node keeps the model loaded between requests, and the CLI is a thin client o
 
 ## Start at Windows login
 
-On a Windows PC the brain (`prada node` and Ollama) lives in WSL, and a Task Scheduler task starts it each time you log in, with no window. Set up the repo in WSL first (a `.venv` or `tutor/.venv` with the requirements installed), then, from an elevated PowerShell:
+On a Windows PC the brain (`prada node` and Ollama) lives in WSL, and a Task Scheduler task starts it each time you log in, with no window. Set up the repo in WSL first (a `.venv` with `pip install -e .`), then, from an elevated PowerShell:
 
 ```powershell
 cd \\wsl$\Ubuntu\home\you\projetos\PRADA\windows
@@ -27,7 +27,40 @@ powershell -ExecutionPolicy Bypass -File .\check-node.ps1          # is the node
 powershell -ExecutionPolicy Bypass -File .\uninstall-autostart.ps1 # remove the task and stop the node
 ```
 
-Run from a `\\wsl$` path, the install script works out the distro and repo path itself; otherwise pass `-Distro Ubuntu -RepoPath /home/you/projetos/PRADA`. `-Port` changes the port. The task runs `scripts/start-node.sh`, which starts Ollama if it isn't already running and then the node; logs go to `~/.local/share/prada/node.log` and `ollama.log` in WSL. Inside WSL, `prada health [--wait 30]` does the same check as `check-node.ps1`. Windows reaches the node through WSL's localhost forwarding (on by default). Microphone and speakers will run on the Windows side later, talking to this node.
+Run from a `\\wsl$` path, the install script works out the distro and repo path itself; otherwise pass `-Distro Ubuntu -RepoPath /home/you/projetos/PRADA`. `-Port` changes the port. The task runs `scripts/start-node.sh`, which starts Ollama if it isn't already running and then the node; logs go to `~/.local/share/prada/node.log` and `ollama.log` in WSL. Inside WSL, `prada health [--wait 30]` does the same check as `check-node.ps1`. Windows reaches the node through WSL's localhost forwarding (on by default). Microphone and speakers run on the Windows side, talking to this node (see [Voice](#voice)).
+
+## Voice
+
+Say a wake word, then speak: PRADA hears you with [openWakeWord](https://github.com/dscripka/openWakeWord), transcribes with [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and answers with a [Piper](https://github.com/OHF-Voice/piper1-gpl) voice, all offline. `prada voice` is a client of the node, like `prada chat`, so it runs where the microphone and speakers are. On the Windows PC that is Windows itself (audio inside WSL is unreliable), reaching the node in WSL at `127.0.0.1:7723` through localhost forwarding.
+
+In a Windows terminal, with Python 3.11+ (the venv lives on the Windows side, outside WSL):
+
+```powershell
+py -m venv $HOME\prada-voice
+$HOME\prada-voice\Scripts\pip install "\\wsl$\Ubuntu\home\you\projetos\PRADA[voice]"
+$HOME\prada-voice\Scripts\prada voice setup     # download the models once (the only network use)
+$HOME\prada-voice\Scripts\prada voice devices   # list microphones and speakers
+$HOME\prada-voice\Scripts\prada voice           # listen; Ctrl+C to stop
+```
+
+Settings go in `[voice]` of the config file (on Windows, `%USERPROFILE%\.config\prada\config.toml`); every key is optional:
+
+```toml
+[voice]
+wake_words = ["hey_jarvis", "~/prada/wake_up_prada.onnx"]  # pretrained names or your own .onnx models
+threshold = 0.5             # wake word score that counts as heard
+whisper_model = "small"     # whisper.cpp model name (multilingual) or path to a ggml .bin
+language = "auto"           # or "en", "ru", ...
+piper_voice = "en_US-amy-medium"
+input_device = "Microphone (USB Audio)"   # name or index from `prada voice devices`
+silence = 0.8               # seconds of quiet that end what you're saying
+
+[voice.voices]              # sentences in these languages get their own voice
+ru = "ru_RU-irina-medium"
+fr = "fr_FR-siwis-medium"
+```
+
+Write Windows paths in single quotes (`'C:\Users\you\wake_up_prada.onnx'`): in double quotes TOML reads `\U` as an escape. Any number of wake words listen at once. The pretrained ones are `alexa`, `hey_jarvis`, `hey_mycroft` and `hey_rhasspy`. "Wake Up Prada" needs its own model: train it once with openWakeWord's [automatic training notebook](https://github.com/dscripka/openWakeWord#training-new-models), save the `.onnx` and add its path to `wake_words`. Models live in `<data dir>/voice` (`%USERPROFILE%\.local\share\prada\voice` on Windows). With `PRADA_FAKE_LLM=1`, `prada voice` reads requests from stdin and prints the replies, so it runs without audio or models.
 
 ## Modules
 
@@ -47,9 +80,9 @@ Prerequisite: [Ollama](https://ollama.com) running locally.
 ```bash
 ollama pull qwen2.5:14b          # get the model
 
-python -m venv tutor/.venv        # set up the module
-source tutor/.venv/bin/activate
-pip install -r tutor/requirements.txt
+python -m venv .venv              # set up PRADA
+source .venv/bin/activate
+pip install -e .
 
 python -m tutor.cli --lang ru     # talk to the tutor (ru, fr or ja)
 ```
@@ -94,7 +127,7 @@ echo "Я читаю книгу." | PRADA_FAKE_LLM=1 python -m tutor.cli
 ## Roadmap
 
 - Corrector → **interlocutor**: respond to *meaning*, not just grade the form
-- **Voice** loop on the home node, then a wake word
+- A trained **"Wake Up Prada"** wake word, and voice that starts at login
 - **Directed drills** for clean skill development
 - **LoRA** fine-tuning on a measured eval set
 - More modules: music, anime streaming, home devices

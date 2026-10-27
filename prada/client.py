@@ -53,8 +53,20 @@ class RemoteSession:
         try:
             with _opener.open(req, timeout=self.timeout) as response:
                 return Reply.model_validate_json(response.read())
+        except urllib.error.HTTPError as e:
+            raise NodeError(
+                f"the PRADA node at {self.url} refused the request ({_reason(e)})"
+            ) from e
         except (urllib.error.URLError, OSError, ValueError) as e:
             raise NodeError(f"lost the PRADA node at {self.url} ({e})") from e
+
+
+def _reason(e: urllib.error.HTTPError) -> str:
+    """The node's own error message for an HTTP error, else the status line."""
+    try:
+        return f"HTTP {e.code}: {json.load(e)['error']}"
+    except (OSError, ValueError, KeyError, TypeError):
+        return f"HTTP {e.code} {e.reason}"
 
 
 def node_url(port: int | None = None) -> str:

@@ -9,10 +9,17 @@ The config file is TOML at $PRADA_CONFIG, or ~/.config/prada/config.toml:
 
     [node]
     port = 7723
+
+    [voice]
+    wake_words = ["hey_jarvis", "~/prada/wake_up_prada.onnx"]
+
+    [voice.voices]
+    ru = "ru_RU-irina-medium"
 """
 
 import os
 import tomllib
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -63,3 +70,49 @@ def node_port(port: int | None = None) -> int:
     if not isinstance(file, dict):
         raise ValueError(f"[node] in {config_path()} must be a table")
     return int(file.get("port", DEFAULT_NODE_PORT))
+
+
+@dataclass(frozen=True)
+class VoiceSettings:
+    """The `[voice]` table: what the voice loop listens for and how it speaks."""
+
+    # openWakeWord pretrained names (e.g. "hey_jarvis") or paths to custom .onnx models.
+    wake_words: tuple[str, ...] = ("hey_jarvis",)
+    threshold: float = 0.5  # wake word score (0-1) that counts as heard
+    whisper_model: str = "small"  # whisper.cpp model name or path to a ggml .bin
+    language: str = "auto"  # what you speak: "auto" or a code such as "en", "ru"
+    piper_voice: str = "en_US-amy-medium"  # Piper voice name or path to its .onnx
+    # Voices for sentences in other languages, e.g. {"ru": "ru_RU-irina-medium"} ([voice.voices]).
+    voices: dict[str, str] = field(default_factory=dict)
+    input_device: str | int | None = None  # sounddevice name or index; None = default
+    output_device: str | int | None = None
+    silence: float = 0.8  # seconds of quiet that end what you're saying
+
+
+def voice_settings() -> VoiceSettings:
+    """Resolve the voice settings from `[voice]` in the config file (defaults otherwise)."""
+    file = load_config().get("voice", {})
+    if not isinstance(file, dict):
+        raise ValueError(f"[voice] in {config_path()} must be a table")
+    fields = VoiceSettings.__dataclass_fields__
+    if unknown := sorted(set(file) - set(fields)):
+        raise ValueError(f"unknown [voice] setting(s) in {config_path()}: {', '.join(unknown)}")
+    voices = file.get("voices", {})
+    if not isinstance(voices, dict) or not all(isinstance(v, str) for v in voices.values()):
+        raise ValueError(f"[voice.voices] in {config_path()} must map languages to voices")
+    words = file.get("wake_words", VoiceSettings.wake_words)
+    if isinstance(words, str):
+        words = [words]
+    if not words or not all(isinstance(w, str) and w.strip() for w in words):
+        raise ValueError(f"[voice] wake_words in {config_path()} must be a list of names or paths")
+    try:
+        return VoiceSettings(
+            **{
+                **file,
+                "wake_words": tuple(words),
+                "threshold": float(file.get("threshold", VoiceSettings.threshold)),
+                "silence": float(file.get("silence", VoiceSettings.silence)),
+            }
+        )
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"bad [voice] setting in {config_path()}: {e}") from e

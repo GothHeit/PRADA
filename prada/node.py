@@ -9,6 +9,7 @@ import sqlite3
 import sys
 import threading
 from collections import OrderedDict
+from collections.abc import Callable
 
 from prada import llm, router
 from prada.module import Context, Module, Reply, Request
@@ -35,9 +36,13 @@ class Node:
         self._sessions: OrderedDict[str, dict] = OrderedDict()
         self._lock = threading.Lock()
 
-    def handle(self, request: Request) -> Reply:
+    def handle(self, request: Request, gone: Callable[[], bool] | None = None) -> Reply:
+        """`gone()` is asked once the node is free: True means whoever sent the request has
+        stopped waiting, so it is dropped instead of acting on it (e.g. a stale wake)."""
         with self._lock:
             name = request.module
+            if gone is not None and gone():
+                return Reply(module=name, error="the client went away; request dropped")
             try:
                 session = self._session(request.session)
                 if name is None:

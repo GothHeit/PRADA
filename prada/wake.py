@@ -11,4 +11,4 @@ class WakeModule(Module):
     def handle(self, request: Request, ctx: Context) -> Reply:
         s = config.wake_settings(None, None, None)
         wol.send_magic_packet(s["mac"], s["broadcast"], s["port"])
-        return Reply(module=self.name, text=persona.waking(s["mac"]), data=s)
+        return Reply(module=self.name, text=persona.waking(), data=s)
