@@ -30,3 +30,8 @@ def test_precedence_cli_over_env_over_file(monkeypatch, tmp_path):
     s = config.wake_settings(None, None, None)
     assert (s["mac"], s["broadcast"], s["port"]) == ("00:00:00:00:00:02", "10.0.0.255", 8)
     assert config.wake_settings("00:00:00:00:00:03", None, 9)["mac"] == "00:00:00:00:00:03"
+
+
+def test_port_zero_is_kept(monkeypatch):
+    monkeypatch.setenv("PRADA_WAKE_PORT", "7")
+    assert config.wake_settings("aa:bb:cc:dd:ee:ff", None, 0)["port"] == 0

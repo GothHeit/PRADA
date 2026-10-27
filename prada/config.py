@@ -6,6 +6,9 @@ The config file is TOML at $PRADA_CONFIG, or ~/.config/prada/config.toml:
     mac = "aa:bb:cc:dd:ee:ff"
     broadcast = "192.168.1.255"
     port = 9
+
+    [node]
+    port = 7723
 """
 
 import os
@@ -45,3 +48,18 @@ def wake_settings(mac: str | None, broadcast: str | None, port: int | None) -> d
         if port is not None
         else int(env.get("PRADA_WAKE_PORT") or file.get("port", 9)),
     }
+
+
+DEFAULT_NODE_PORT = 7723  # P-R-A-D on a phone keypad
+
+
+def node_port(port: int | None = None) -> int:
+    """The home node's localhost port: CLI > PRADA_NODE_PORT > [node] port > 7723."""
+    if port is not None:
+        return port
+    if env := os.environ.get("PRADA_NODE_PORT"):
+        return int(env)
+    file = load_config().get("node", {})
+    if not isinstance(file, dict):
+        raise ValueError(f"[node] in {config_path()} must be a table")
+    return int(file.get("port", DEFAULT_NODE_PORT))

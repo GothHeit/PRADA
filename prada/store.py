@@ -33,7 +33,8 @@ def open_store(module: str, migrations: list[str], path: Path | str | None = Non
     path = db_path() if path is None else path
     if str(path) != ":memory:":
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(path)
+    # The node's server threads share one connection per module, serialized by the node.
+    db = sqlite3.connect(path, check_same_thread=False)
     db.row_factory = sqlite3.Row
     db.execute(
         "CREATE TABLE IF NOT EXISTS schema_versions (module TEXT PRIMARY KEY, version INTEGER NOT NULL)"

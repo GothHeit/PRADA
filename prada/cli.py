@@ -14,6 +14,12 @@ def main(argv: list[str] | None = None) -> int:
     wake.add_argument("--broadcast", help="broadcast address (default 255.255.255.255)")
     wake.add_argument("--port", type=int, help="UDP port (default 9)")
 
+    chat = sub.add_parser("chat", help="talk to PRADA; each message goes to the right module")
+    chat.add_argument("--port", type=int, help="home node port (default 7723)")
+
+    node = sub.add_parser("node", help="run the home node that hosts the modules (localhost)")
+    node.add_argument("--port", type=int, help="port to listen on (default 7723)")
+
     tutor = sub.add_parser("tutor", help="practice a language with the offline tutor")
     from tutor.cli import add_arguments
 
@@ -36,10 +42,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"prada: {e}", file=sys.stderr)
             return 1
         print(f"Magic packet sent to {s['mac']} via {s['broadcast']}:{s['port']}")
+    elif args.command == "chat":
+        from prada import client
+
+        return client.repl(client.connect(args.port))
+    elif args.command == "node":
+        from prada import server
+
+        try:
+            server.serve(config.node_port(args.port))
+        except (ValueError, OSError) as e:
+            print(f"prada: {e}", file=sys.stderr)
+            return 1
     elif args.command == "eval":
         from tutor.eval import run as run_eval
 
-        run_eval(args.lang)
+        return run_eval(args.lang)
     elif args.tutor_command == "stats":
         from tutor.cli import show_stats
 
@@ -47,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         from tutor.cli import run
 
-        run(args.lang or "ru")
+        return run(args.lang or "ru")
     return 0
 
 

@@ -69,3 +69,12 @@ def test_cli_eval_smoke(monkeypatch, capsys):
     assert prada_cli.main(["eval", "--lang", "ja"]) == 0
     out = capsys.readouterr().out
     assert "[ja]" in out and "error category" in out
+
+
+def test_eval_reports_model_errors_in_one_line(monkeypatch, capsys):
+    def down(text, lang, chat=None):
+        raise ConnectionError("Failed to connect to Ollama")
+
+    monkeypatch.setattr(tutor_eval, "run_turn", down)
+    assert prada_cli.main(["eval", "--lang", "ru"]) == 1
+    assert capsys.readouterr().err.strip() == "eval: [ru] stopped: Failed to connect to Ollama"

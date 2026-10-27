@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 
 
@@ -77,3 +78,11 @@ def get_language(code: str) -> Language:
         return LANGUAGES[code.lower()]
     except KeyError:
         raise ValueError(f"unknown language {code!r}; choose from {', '.join(LANGUAGES)}") from None
+
+
+_SCRIPTS = (("ja", re.compile(r"[぀-ヿ一-鿿]")), ("ru", re.compile(r"[Ѐ-ӿ]")))
+
+
+def script_language(text: str) -> str | None:
+    """The language whose script `text` uses, when the script alone tells (ja, ru)."""
+    return next((code for code, pattern in _SCRIPTS if pattern.search(text)), None)

@@ -8,6 +8,7 @@ model change; with PRADA_FAKE_LLM=1 it only exercises the plumbing.
 import argparse
 import json
 import re
+import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -112,16 +113,22 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def run(langs: list[str] | None) -> None:
+def run(langs: list[str] | None) -> int:
     for lang in langs or sorted(LANGUAGES):
-        print(format_report(lang, score_language(lang)))
+        try:
+            score = score_language(lang)
+        except Exception as e:  # e.g. Ollama not running: one line, not a traceback
+            print(f"eval: [{lang}] stopped: {e}", file=sys.stderr)
+            return 1
+        print(format_report(lang, score))
+    return 0
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m tutor.eval", description="Score the tutor")
     add_arguments(parser)
-    run(parser.parse_args(argv).lang)
+    return run(parser.parse_args(argv).lang)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
