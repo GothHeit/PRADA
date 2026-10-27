@@ -9,7 +9,7 @@ from prada.module import Context, Module, Reply, Request
 from prada.node import Node
 from prada.server import make_server
 from prada.wake import WakeModule
-from tutor.languages import script_language
+from tutor.languages import detect_language, script_language
 from tutor.module import TutorModule
 
 
@@ -207,7 +207,7 @@ def test_node_port_precedence(monkeypatch, tmp_path):
 
 def test_cli_chat_routes(monkeypatch, capsys):
     monkeypatch.setenv("PRADA_FAKE_LLM", "1")
-    lines = iter(["本を読みます。", "wake the pc"])
+    lines = iter(["tutor 本を読みます。", "what time is it", "wake the pc"])
 
     def fake_input(_):
         try:
@@ -219,6 +219,7 @@ def test_cli_chat_routes(monkeypatch, capsys):
     assert main(["chat"]) == 0
     captured = capsys.readouterr()
     assert "何を読むのが好きですか？" in captured.out
+    assert "(fake assistant) what time is it" in captured.out
     assert "wake: no MAC" in captured.err
 
 
@@ -264,3 +265,56 @@ def test_tutor_history_is_capped(monkeypatch):
         n.handle(Request(text=text, session="s", options={"lang": "fr"}))
     history = n._sessions["s"]["tutor"]["history"]
     assert [m["content"] for m in history if m["role"] == "user"] == ["deux", "trois"]
+
+
+@pytest.mark.parametrize(
+    "text,lang",
+    [
+        ("Je suis allé a la plage hier.", "fr"),
+        ("Il fait beau aujourd'hui.", "fr"),
+        ("Elle est très content.", "fr"),
+        ("café", "fr"),
+        ("Я читаю книгу.", "ru"),
+        ("私は本を読みます。", "ja"),
+        ("What is the weather like today?", None),
+        ("how do I install python", None),
+        ("hello", None),
+        ("123", None),
+    ],
+)
+def test_detect_language(text, lang):
+    assert detect_language(text) == lang
+
+
+def test_english_goes_to_the_assistant_and_french_stays_with_the_tutor(monkeypatch):
+    monkeypatch.setenv("PRADA_FAKE_LLM", "1")
+    n = Node(db_path=":memory:")
+    calls = []
+    real = router.route
+    monkeypatch.setattr(router, "route", lambda *a, **k: calls.append(a[0]) or real(*a, **k))
+    send = lambda text: n.handle(Request(text=text, session="s"))  # noqa: E731
+    assert send("What is the weather like?").module == "assistant"
+    assert send("tutor Je lis un livre.").module == "tutor"
+    assert send("Il fait beau aujourd'hui.").module == "tutor"
+    assert calls == ["What is the weather like?", "tutor Je lis un livre."]  # none for the 3rd
+    assert send("and what is the capital of Peru?").module == "assistant"
+
+
+def test_french_text_overrides_the_session_language(monkeypatch):
+    monkeypatch.setenv("PRADA_FAKE_LLM", "1")
+    n = Node([TutorModule()], db_path=":memory:")
+    n.handle(Request(text="Я читаю.", session="s"))
+    assert (
+        n.handle(Request(text="Je lis un livre.", session="s"))
+        .data["reply_target"]
+        .startswith("Qu'est")
+    )
+
+
+def test_tutor_prompt_lists_categories_only_where_defined():
+    from tutor.languages import get_language
+    from tutor.prompts import build_system_prompt
+
+    assert "tense_mood:" in build_system_prompt(get_language("fr"))
+    assert "counter:" in build_system_prompt(get_language("ja"))
+    assert "Choose error_type" not in build_system_prompt(get_language("ru"))

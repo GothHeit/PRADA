@@ -12,9 +12,18 @@ _BASE = """You are a {Language} language tutor for a beginner student. You alway
 """
 
 
+_CATEGORIES = """
+Choose error_type with these definitions. When two fit, take the first whose definition matches the real mistake:
+{categories}
+"""
+
+
 def build_system_prompt(language: Language) -> str:
+    base = _BASE + (
+        _CATEGORIES.replace("{categories}", language.categories) if language.categories else ""
+    )
     return (
-        _BASE.replace("{Language}", language.name)
+        base.replace("{Language}", language.name)
         .replace("{script}", language.script)
         .replace("{checklist}", language.checklist)
     )

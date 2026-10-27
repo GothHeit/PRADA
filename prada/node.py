@@ -19,11 +19,12 @@ MAX_SESSIONS = 64
 
 
 def default_modules() -> list[Module]:
-    """The built-in modules; the first is the router's fallback."""
+    """The built-in modules; the first (the assistant) is the router's fallback."""
+    from prada.assistant import AssistantModule
     from prada.wake import WakeModule
     from tutor.module import TutorModule
 
-    return [TutorModule(), WakeModule()]
+    return [AssistantModule(), TutorModule(), WakeModule()]
 
 
 class Node:
@@ -62,6 +63,8 @@ class Node:
         modules = list(self.modules.values())
         if len(modules) == 1:
             return modules[0].name, request
+        if current in self.modules and self.modules[current].claims(request.text):
+            return current, request  # no router call mid-conversation
         return router.route(request.text, modules, self._chat(router.fake_chat), current), request
 
     def _chat(self, fake):

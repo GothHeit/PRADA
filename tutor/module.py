@@ -5,7 +5,7 @@ import sys
 
 from prada.module import Context, Module, Reply, Request
 from tutor import fake_client, memory
-from tutor.languages import get_language, script_language
+from tutor.languages import detect_language, get_language
 from tutor.orchestrator import run_turn
 
 MAX_HISTORY = 20  # messages kept per session, so the system prompt never gets truncated
@@ -14,19 +14,21 @@ MAX_HISTORY = 20  # messages kept per session, so the system prompt never gets t
 class TutorModule(Module):
     name = "tutor"
     description = (
-        "Language practice in Russian, French or Japanese: corrects the user's sentence and "
-        "keeps a conversation going. Use it for anything written in those languages or about "
-        "learning them."
+        "Language practice: corrects a sentence the user wrote in Russian, French or Japanese "
+        "and keeps a practice conversation going. Not for questions in English."
     )
     migrations = memory.MIGRATIONS
     fake_chat = staticmethod(fake_client.chat)
 
+    def claims(self, text: str) -> bool:
+        return detect_language(text) is not None
+
     def handle(self, request: Request, ctx: Context) -> Reply:
-        # An explicit --lang wins; then the script of the text; then the session's language.
-        # French is the only Latin-script language, so plain Latin text falls back to it.
+        # An explicit --lang wins; then what the text itself is written in (script, or French
+        # words); then the session's language. Anything unclear is practised as French.
         lang = (
             request.options.get("lang")
-            or script_language(request.text)
+            or detect_language(request.text)
             or ctx.state.get("lang")
             or "fr"
         )

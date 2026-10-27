@@ -45,5 +45,10 @@ class Module:
     # Canned chat used under PRADA_FAKE_LLM; None if the module never calls the model.
     fake_chat: ClassVar[Chat | None] = None
 
+    def claims(self, text: str) -> bool:
+        """True when `text` plainly continues a conversation with this module, so the router
+        model is skipped. Only asked of the module the session is already talking to."""
+        return False
+
     def handle(self, request: Request, ctx: Context) -> Reply:
         raise NotImplementedError

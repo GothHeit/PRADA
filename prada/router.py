@@ -14,7 +14,7 @@ _PROMPT = """You are the router of PRADA, a personal assistant made of modules. 
 Modules:
 {modules}
 
-If no module clearly fits, pick {default}.{current}
+If no module clearly fits, pick {default}. Pick a language-practice module only for a sentence the user wrote to practise a language, never for a question or request in English.{current}
 """
 
 
@@ -31,7 +31,11 @@ def route_schema(names: list[str]) -> dict:
 
 def build_prompt(modules: list[Module], current: str | None = None) -> str:
     listing = "\n".join(f"- {m.name}: {m.description}" for m in modules)
-    note = f"\nThe conversation so far is with {current}." if current else ""
+    note = (
+        f"\nThe conversation so far is with {current}; stay with it only if the message plausibly continues it."
+        if current
+        else ""
+    )
     return _PROMPT.format(modules=listing, default=modules[0].name, current=note)
 
 
