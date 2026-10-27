@@ -28,6 +28,8 @@ def load_config() -> dict:
 def wake_settings(mac: str | None, broadcast: str | None, port: int | None) -> dict:
     """Resolve wake settings; raises ValueError if the MAC is not set anywhere."""
     file = load_config().get("wake", {})
+    if not isinstance(file, dict):
+        raise ValueError(f"[wake] in {config_path()} must be a table")
     env = os.environ
     mac = mac or env.get("PRADA_WAKE_MAC") or file.get("mac")
     if not mac:
@@ -39,5 +41,7 @@ def wake_settings(mac: str | None, broadcast: str | None, port: int | None) -> d
         "broadcast": broadcast
         or env.get("PRADA_WAKE_BROADCAST")
         or file.get("broadcast", "255.255.255.255"),
-        "port": port or int(env.get("PRADA_WAKE_PORT") or file.get("port", 9)),
+        "port": port
+        if port is not None
+        else int(env.get("PRADA_WAKE_PORT") or file.get("port", 9)),
     }

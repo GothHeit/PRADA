@@ -2,6 +2,7 @@ import argparse
 import sys
 
 from prada import config, wol
+from tutor.languages import LANGUAGES
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -17,6 +18,9 @@ def main(argv: list[str] | None = None) -> int:
     from tutor.cli import add_arguments
 
     add_arguments(tutor)
+    tutor_sub = tutor.add_subparsers(dest="tutor_command")
+    stats = tutor_sub.add_parser("stats", help="show your logged practice, errors by category")
+    stats.add_argument("--lang", dest="stats_lang", choices=sorted(LANGUAGES), help="one language")
 
     args = parser.parse_args(argv)
     if args.command == "wake":
@@ -27,10 +31,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"prada: {e}", file=sys.stderr)
             return 1
         print(f"Magic packet sent to {s['mac']} via {s['broadcast']}:{s['port']}")
+    elif args.tutor_command == "stats":
+        from tutor.cli import show_stats
+
+        show_stats(args.stats_lang or args.lang)
     else:
         from tutor.cli import run
 
-        run(args.lang)
+        run(args.lang or "ru")
     return 0
 
 
