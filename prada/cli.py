@@ -30,6 +30,13 @@ def main(argv: list[str] | None = None) -> int:
     voice_sub = voice.add_subparsers(dest="voice_command")
     voice_sub.add_parser("setup", help="download the wake word, speech and voice models")
     voice_sub.add_parser("devices", help="list microphones and speakers")
+    train = voice_sub.add_parser("train", help="train your own wake word model (Linux/WSL)")
+    train.add_argument("phrase", nargs="?", help='what you will say, e.g. "wake up prada"')
+    train.add_argument("--setup", action="store_true", help="download the training data once")
+    train.add_argument("--name", help="model name (default: the phrase, e.g. wake_up_prada)")
+    train.add_argument("--samples", type=int, help="synthetic clips of the phrase (default 25000)")
+    train.add_argument("--steps", type=int, help="training steps (default 50000)")
+    train.add_argument("--out", help="folder or .onnx path for the model (default: voice models)")
 
     tutor = sub.add_parser("tutor", help="practice a language with the offline tutor")
     from tutor.cli import add_arguments
@@ -99,6 +106,8 @@ def _voice(args) -> int:
     from prada import client, llm
     from prada.voice.loop import run
 
+    if args.voice_command == "train":
+        return _train(args)
     if llm.fake_enabled() and args.voice_command is None:
         from prada.voice.fake import TextEars, TextMouth
 
@@ -135,6 +144,34 @@ def _voice(args) -> int:
     except devices.errors() as e:
         print(f"prada: {e}", file=sys.stderr)
         return 1
+
+
+def _train(args) -> int:
+    from prada.voice import train
+
+    try:
+        if args.setup:
+            train.setup()
+            if not args.phrase:
+                return 0
+        elif not args.phrase:
+            print('prada: what should I train? e.g. "wake up prada"', file=sys.stderr)
+            return 1
+        options = {"samples": args.samples, "steps": args.steps}
+        options = {k: v for k, v in options.items() if v is not None}
+        path = train.train(args.phrase, args.name, out=args.out, **options)
+    except ImportError as e:
+        print(f'prada: training needs `pip install "prada[wakeword]"` ({e})', file=sys.stderr)
+        return 1
+    except (ValueError, RuntimeError, OSError) as e:
+        print(f"prada: {e}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("prada: stopped; run the same command to resume", file=sys.stderr)
+        return 130
+    print(f"Wake word model saved to {path}")
+    print(f'Put it in the voice models folder and add "{path.stem}" to [voice] wake_words.')
+    return 0
 
 
 if __name__ == "__main__":

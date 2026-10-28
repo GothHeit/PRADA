@@ -19,6 +19,28 @@ voice = [
     "sounddevice>=0.5",
     "numpy>=1.24",
 ]
+# Training your own wake words (`prada voice train`, Linux/WSL, Python 3.11: openwakeword
+# needs tflite-runtime there, which has no newer wheels). Several GB, mostly PyTorch.
+wakeword = [
+    "openwakeword>=0.6",
+    "piper-tts==1.3.0",  # what piper-sample-generator 3.2.0 (downloaded by --setup) needs
+    "webrtcvad-wheels>=2.0.14",
+    "torch>=2.2,<2.9",
+    "torchaudio>=2.2,<2.9",  # 2.9 moved audio loading to torchcodec (needs FFmpeg)
+    "torchinfo>=1.8",
+    "torchmetrics>=1.2",
+    "onnx>=1.14",  # exporting the trained model
+    "speechbrain>=0.5.14,<1",
+    "audiomentations>=0.33",
+    "torch-audiomentations>=0.11",
+    "acoustics>=0.2.6",
+    "mutagen>=1.47",
+    "pronouncing>=0.2",
+    "deep-phonemizer==0.0.19",
+    "pyyaml>=6",
+    "scipy>=1.10,<1.17",  # acoustics imports scipy.special.sph_harm, gone in 1.17
+    "soundfile>=0.12",
+]
 
 [project.scripts]
 prada = "prada.cli:main"

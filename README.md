@@ -60,7 +60,21 @@ ru = "ru_RU-irina-medium"
 fr = "fr_FR-siwis-medium"
 ```
 
-Write Windows paths in single quotes (`'C:\Users\you\wake_up_prada.onnx'`): in double quotes TOML reads `\U` as an escape. Any number of wake words listen at once. The pretrained ones are `alexa`, `hey_jarvis`, `hey_mycroft` and `hey_rhasspy`. "Wake Up Prada" needs its own model: train it once with openWakeWord's [automatic training notebook](https://github.com/dscripka/openWakeWord#training-new-models), save the `.onnx` and add its path to `wake_words`. Models live in `<data dir>/voice` (`%USERPROFILE%\.local\share\prada\voice` on Windows). With `PRADA_FAKE_LLM=1`, `prada voice` reads requests from stdin and prints the replies, so it runs without audio or models.
+Write Windows paths in single quotes (`'C:\Users\you\wake_up_prada.onnx'`): in double quotes TOML reads `\U` as an escape. Any number of wake words listen at once. The pretrained ones are `alexa`, `hey_jarvis`, `hey_mycroft` and `hey_rhasspy`. "Wake Up Prada" needs its own model (see below). Models live in `<data dir>/voice` (`%USERPROFILE%\.local\share\prada\voice` on Windows); a bare name in `wake_words` is a model there if `<name>.onnx` exists, else a pretrained one. With `PRADA_FAKE_LLM=1`, `prada voice` reads requests from stdin and prints the replies, so it runs without audio or models.
+
+### Your own wake words
+
+`prada voice train "wake up prada"` trains a wake word model on your own machine with openWakeWord's recipe: [piper-sample-generator](https://github.com/rhasspy/piper-sample-generator) says the phrase, and phrases that sound like it, in hundreds of synthetic voices, the clips get room echo and background noise, and a small model learns to tell them from 2,000 hours of everyday audio. It runs on Linux (WSL on the Windows PC), with Python 3.11 (openwakeword needs `tflite-runtime` on Linux, which stops at 3.11), in its own venv since PyTorch takes several GB:
+
+```sh
+curl -LsSf https://astral.sh/uv/install.sh | sh    # uv fetches Python 3.11 if the distro lacks it
+uv venv -p 3.11 ~/.venvs/prada-train
+VIRTUAL_ENV=~/.venvs/prada-train uv pip install -e ".[wakeword]"
+~/.venvs/prada-train/bin/prada voice train --setup             # download ~17 GB of training data, once
+~/.venvs/prada-train/bin/prada voice train "wake up prada" --out /mnt/c/Users/you/.local/share/prada/voice
+```
+
+After `--setup` training is offline. With an NVIDIA GPU (PyTorch uses it from WSL) a run takes roughly one to two hours; on CPU only, plan for a night. Stop it any time and run the same command to continue. `--out` writes the model straight into the Windows voice models folder, so `wake_words = ["wake_up_prada", "hey_jarvis"]` finds it. Train more phrases the same way, one model each. `--samples` (default 25000) and `--steps` (default 50000) trade time for accuracy; WAV recordings of your own room (16 kHz) in `~/.local/share/prada/wakeword/background/<any folder>/` teach it what to ignore. If it wakes too easily or too rarely, raise or lower `threshold`.
 
 ## Modules
 

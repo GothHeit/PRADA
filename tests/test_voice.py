@@ -98,6 +98,9 @@ def test_model_paths(monkeypatch, tmp_path):
     model.parent.mkdir(parents=True)
     model.write_bytes(b"")
     assert _whisper_model("small") == model
+    own = model.parent / "wake_up_prada.onnx"  # a bare name finds a model trained here
+    own.write_bytes(b"")
+    assert _wake_model("wake_up_prada") == str(own)
 
 
 def test_voice_settings(tmp_path):
@@ -140,3 +143,24 @@ def test_split_by_language():
     ]
     assert loop.split_by_language("Что? Hi.", set()) == [(None, "Что? Hi.")]
     assert loop.split_by_language("  ", {"ru"}) == []
+
+
+def test_voice_switches_off_onnxruntime_telemetry():
+    import os
+
+    import prada.voice  # noqa: F401
+
+    assert os.environ["ORT_DISABLE_TELEMETRY"] == "1"
+
+
+def test_no_telemetry_on_windows_either(monkeypatch):
+    import sys
+    import types
+
+    from prada.voice.devices import _no_telemetry
+
+    calls = []
+    ort = types.SimpleNamespace(disable_telemetry_events=lambda: calls.append(1))
+    monkeypatch.setitem(sys.modules, "onnxruntime", ort)
+    _no_telemetry()
+    assert calls == [1]

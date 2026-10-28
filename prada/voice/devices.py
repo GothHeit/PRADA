@@ -25,7 +25,8 @@ def _is_path(name: str) -> bool:
 
 def _wake_model(word: str) -> str:
     if not _is_path(word):
-        return word  # an openWakeWord pretrained model, e.g. "hey_jarvis"
+        own = models_dir() / f"{word}.onnx"  # e.g. trained by `prada voice train`
+        return str(own) if own.is_file() else word  # else pretrained, e.g. "hey_jarvis"
     path = Path(word).expanduser()
     if path.suffix != ".onnx":
         raise ValueError(f"wake word models must be .onnx files: {path}")
@@ -57,7 +58,10 @@ def setup(s: VoiceSettings) -> None:
     target = models_dir()
     target.mkdir(parents=True, exist_ok=True)
     print("openWakeWord models ...")
-    openwakeword.utils.download_models([w for w in s.wake_words if not _is_path(w)])
+    pretrained = [w for w in s.wake_words if not _is_path(w) and _wake_model(w) == w]
+    # An empty list downloads every pretrained model; a name matching none of them fetches
+    # only the shared feature models.
+    openwakeword.utils.download_models(pretrained or ["features-only"])
     if not _is_path(s.whisper_model):
         print(f"whisper.cpp model {s.whisper_model} ...")
         if not pywhispercpp.utils.download_model(s.whisper_model, str(target)):
@@ -77,6 +81,14 @@ def errors() -> tuple[type[Exception], ...]:
     except (ImportError, OSError):
         return (ValueError, OSError)
     return (ValueError, OSError, sd.PortAudioError)
+
+
+def _no_telemetry() -> None:
+    """ORT_DISABLE_TELEMETRY (see prada.voice) covers Linux and macOS; on Windows onnxruntime
+    writes ETW telemetry events instead, which only this call switches off."""
+    import onnxruntime
+
+    onnxruntime.disable_telemetry_events()
 
 
 def list_devices() -> str:
@@ -99,6 +111,7 @@ class MicEars:
         from openwakeword.model import Model as WakeModel
         from pywhispercpp.model import Model as WhisperModel
 
+        _no_telemetry()
         self.threshold = s.threshold
         self.silence = s.silence
         self.language = s.language
@@ -168,6 +181,7 @@ class PiperMouth:
     def __init__(self, s: VoiceSettings):
         from piper import PiperVoice
 
+        _no_telemetry()
         self.voice = PiperVoice.load(_piper_voice(s.piper_voice))
         self.voices = {lang: PiperVoice.load(_piper_voice(v)) for lang, v in s.voices.items()}
         self.device = s.output_device

@@ -7,3 +7,9 @@ node it is the Pi. Engines: openWakeWord (wake words), whisper.cpp (speech-to-te
 (text-to-speech), all offline. They come with the optional `voice` extra and are imported
 only by `prada.voice.devices`; under PRADA_FAKE_LLM the loop runs on text fakes instead.
 """
+
+import os
+
+# onnxruntime (openWakeWord, Piper) uploads usage telemetry to Microsoft on import on Linux
+# unless told not to; on Windows it logs ETW events instead (devices._no_telemetry).
+os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
