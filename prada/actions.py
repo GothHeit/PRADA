@@ -73,9 +73,10 @@ def execute(action: Action, executor: Executor | None, ctx: "Context") -> Outcom
     try:
         result = executor.run(action, ctx)
         executor.check(action, result, ctx)
+        said = executor.done(action, result)
     except Exception as e:
         reason = str(e) or type(e).__name__
         return Outcome(
             action=asked, ok=False, said=persona.failed(action.describe(), reason), error=reason
         )
-    return Outcome(action=asked, ok=True, said=executor.done(action, result), data=result)
+    return Outcome(action=asked, ok=True, said=said, data=result)

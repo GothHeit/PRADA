@@ -2,6 +2,7 @@ from typing import Literal
 
 import pytest
 
+from prada import node as node_module
 from prada import persona
 from prada.actions import Action, ActionFailed, Executor
 from prada.assistant import AssistantModule
@@ -68,7 +69,7 @@ def test_verified_action_is_claimed():
 def test_failed_action_is_never_claimed(executor, reason):
     reply = Node([Pinger(executor)]).handle(Request(text="go"))
     assert reply.error is None and "Pinged" not in reply.text
-    assert reply.text == "Let me see. " + persona.failed("ping", reason)
+    assert reply.text == persona.failed("ping", reason)  # not "Let me see." as well
     assert not reply.outcomes[0].ok and reply.outcomes[0].error == reason
 
 
@@ -105,7 +106,14 @@ def test_note_that_does_not_stick_is_reported(monkeypatch):
 
 
 def test_note_without_memory_fails(monkeypatch):
-    monkeypatch.setattr("prada.node.open_store", lambda *a: (_ for _ in ()).throw(OSError("disk")))
+    real = node_module.open_store
+
+    def broken(module, migrations, path=None):
+        if path == ":memory:":  # the conversation memory's RAM fallback
+            return real(module, migrations, path)
+        raise OSError("disk")
+
+    monkeypatch.setattr("prada.node.open_store", broken)
     reply = Node([NotesModule()]).handle(Request(text="note buy eggs"))
     assert not reply.outcomes[0].ok and "wrote that down" not in reply.text
 

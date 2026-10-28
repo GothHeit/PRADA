@@ -34,8 +34,11 @@ class AssistantModule(Module):
 
     def handle(self, request: Request, ctx: Context) -> Reply:
         # The shared conversation, so she remembers what she said through any module.
+        system = _SYSTEM
+        if ctx.memory:
+            system += f"\n\nWhat you remember of earlier conversations:\n{ctx.memory}"
         messages = (
-            [{"role": "system", "content": _SYSTEM}]
+            [{"role": "system", "content": system}]
             + ctx.turns
             + [{"role": "user", "content": request.text}]
         )

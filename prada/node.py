@@ -4,22 +4,29 @@
 runs the actions the module asked for (see prada.actions) and always returns a Reply: module
 errors come back in `Reply.error` instead of raising. Calls are serialized, so modules never
 share the model or a database connection concurrently. Each finished turn is added to the
-session's shared conversation, so every module sees what PRADA has said, whoever said it.
+shared conversation, so every module sees what PRADA has said, whoever said it. The
+conversation lives in the store (prada.memory), so it survives restarts; summaries of finished
+conversations are written in the background and loaded into `Context.memory`.
 """
 
 import sqlite3
 import sys
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Callable
 
 from prada import actions, llm, router
+from prada.memory import MIGRATIONS as MEMORY_MIGRATIONS
+from prada.memory import Memory, summarize
+from prada.memory import fake_chat as memory_fake_chat
 from prada.module import Context, Module, Reply, Request
 from prada.store import open_store
 
 KEEP_ALIVE = "30m"  # how long Ollama keeps the model loaded between requests
 MAX_SESSIONS = 64
-MAX_TURNS = 20  # messages of shared conversation kept per session
+SUMMARY_RETRY = 5 * 60  # seconds before trying again after a summary failed
+MAX_TURNS = 20  # messages of the current conversation given to a module
 
 
 def default_modules() -> list[Module]:
@@ -33,7 +40,20 @@ def default_modules() -> list[Module]:
 
 
 class Node:
-    def __init__(self, modules: list[Module] | None = None, db_path=None):
+    def __init__(
+        self,
+        modules: list[Module] | None = None,
+        db_path=None,
+        clock=time.time,
+        background: bool = True,
+    ):
+        """`background`: write episode summaries in a thread after a reply (tests turn it off
+        and call `summarize_pending`)."""
+        self._clock = clock
+        self._background = background
+        self._memory: Memory | None = None
+        self._summarizing = False
+        self._retry_at = 0.0
         self.modules = {m.name: m for m in (modules or default_modules())}
         self._db_path = db_path
         self._dbs: dict[str, sqlite3.Connection | None] = {}
@@ -49,6 +69,7 @@ class Node:
                 return Reply(module=name, error="the client went away; request dropped")
             try:
                 session = self._session(request.session)
+                memory = self._mem()
                 if name is None:
                     name, request = self._route(request, session.get("current"))
                 module = self.modules.get(name)
@@ -58,14 +79,17 @@ class Node:
                     chat=self._chat(module.fake_chat),
                     db=self._db(module),
                     state=session.setdefault(name, {}),
-                    turns=list(session.get("turns", [])),
+                    turns=memory.recent(MAX_TURNS),
+                    memory=memory.remembered(),
                 )
                 reply = self._act(module, module.handle(request, ctx), ctx)
                 session["current"] = name
-                self._remember(session, request.text, reply)
+                self._remember(memory, request.text, reply)
                 return reply
             except Exception as e:
                 return Reply(module=name, error=f"{name or 'router'}: {e}")
+            finally:
+                self._summarize_later()
 
     def _act(self, module: Module, reply: Reply, ctx: Context) -> Reply:
         """Run the reply's actions with the module's own executors; what PRADA says about
@@ -74,16 +98,70 @@ class Node:
             return reply
         allowed = {actions.kind_of(e.action): e for e in module.executors}
         outcomes = [actions.execute(a, allowed.get(a.kind), ctx) for a in reply.actions]
-        text = " ".join(t for t in [reply.text, *(o.said for o in outcomes)] if t)
+        said = list(dict.fromkeys(o.said for o in outcomes if o.said))  # one line per kind
+        # The module's own words come first, but never next to a failure: it may have
+        # written them assuming the action would work.
+        lead = [] if any(not o.ok for o in outcomes) else [reply.text]
+        text = " ".join(t for t in [*lead, *said] if t)
         return reply.model_copy(update={"text": text, "actions": [], "outcomes": outcomes})
 
-    def _remember(self, session: dict, said: str, reply: Reply) -> None:
+    def _remember(self, memory: Memory, said: str, reply: Reply) -> None:
         if reply.error or not reply.text:
             return
-        turns = session.setdefault("turns", [])
-        turns.append({"role": "user", "content": said})
-        turns.append({"role": "assistant", "content": reply.text})
-        del turns[:-MAX_TURNS]
+        try:
+            memory.add(said, reply.text)
+        except sqlite3.Error as e:
+            # The actions already ran: the user must still hear what happened.
+            print(f"memory: could not keep this turn ({e})", file=sys.stderr)
+
+    def _mem(self) -> Memory:
+        """The node's conversation memory; if the store can't be opened it lives in RAM for
+        this run (PRADA still holds a conversation, it just won't survive a restart)."""
+        if self._memory is None:
+            try:
+                db = open_store("memory", MEMORY_MIGRATIONS, self._db_path)
+            except (sqlite3.Error, OSError, RuntimeError) as e:
+                print(f"memory: conversations won't be kept after a restart ({e})", file=sys.stderr)
+                db = open_store("memory", MEMORY_MIGRATIONS, ":memory:")
+            self._memory = Memory(db, self._clock)
+        return self._memory
+
+    def summarize_pending(self) -> None:
+        """Write the summary of every finished conversation that has none. One run at a time;
+        the model call is made without the node lock, so requests never wait for it. After a
+        failure nothing is retried for `SUMMARY_RETRY` seconds."""
+        with self._lock:
+            if self._summarizing or self._clock() < self._retry_at:
+                return
+            memory = self._mem()
+            jobs = memory.jobs()
+            if not jobs:
+                return
+            self._summarizing = True
+            model = "fake" if llm.fake_enabled() else llm.MODEL
+            chat = self._chat(memory_fake_chat)
+        try:
+            for episode, transcript in jobs:
+                summary = "" if transcript is None else summarize(chat, transcript)
+                with self._lock:
+                    memory.store(episode, summary, model)
+        except Exception as e:
+            print(f"memory: could not summarize a conversation ({e})", file=sys.stderr)
+            with self._lock:
+                self._retry_at = self._clock() + SUMMARY_RETRY
+        finally:
+            with self._lock:
+                self._summarizing = False
+
+    def _summarize_later(self) -> None:
+        if not self._background or self._summarizing or self._clock() < self._retry_at:
+            return
+        try:
+            pending = self._mem().has_pending()
+        except Exception:
+            return
+        if pending:
+            threading.Thread(target=self.summarize_pending, daemon=True).start()
 
     def _route(self, request: Request, current: str | None) -> tuple[str, Request]:
         if hit := router.explicit(request.text, self.modules):

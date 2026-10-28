@@ -7,6 +7,10 @@ import os
 import sys
 
 MODEL = "qwen2.5:14b"
+# Context window in tokens, set explicitly: Ollama's default (2048-4096) silently cuts the
+# start of a long prompt, i.e. the persona and what she remembers. Keep the prompt well under:
+# persona, memory (prada.memory.MEMORY_CHARS) and MAX_TURNS messages come to about 3000.
+NUM_CTX = 8192
 
 _fake_notice_shown = False
 
@@ -18,7 +22,7 @@ def chat(messages, schema, model=MODEL, keep_alive=None) -> str:
         model=model,
         messages=messages,
         format=schema,
-        options={"temperature": 0},
+        options={"temperature": 0, "num_ctx": NUM_CTX},
         keep_alive=keep_alive,
     )
     return response["message"]["content"]

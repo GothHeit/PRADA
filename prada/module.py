@@ -48,6 +48,9 @@ class Context:
     # The session's conversation with PRADA as chat messages, whichever module answered;
     # read-only for modules (the node appends each finished turn).
     turns: list[dict] = field(default_factory=list)
+    # What PRADA remembers of earlier conversations (episode summaries, newest first,
+    # within a budget); "" when there is nothing yet. Read-only.
+    memory: str = ""
 
 
 class Module:

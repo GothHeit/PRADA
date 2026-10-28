@@ -15,12 +15,12 @@ def system_prompt(task: str) -> str:
 
 
 def waking() -> str:
-    return "Okay, waking your PC up for you. Give it a moment to stretch."
+    return "Okay, I sent the wake signal to your PC. Give it a moment to stretch."
 
 
 def failed(what: str, reason: str) -> str:
     """What PRADA says when an action did not happen: never a claim that it did."""
-    return f"I tried to {what}, but it didn't work: {reason}."
+    return f"I tried to {what}, but it didn't work: {reason.rstrip('. ')}."
 
 
 def noted(text: str) -> str:
