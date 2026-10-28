@@ -10,6 +10,7 @@ that, `prada voice train "wake up prada"` runs offline and writes `wake_up_prada
 command picks up where an interrupted one stopped. Linux only (WSL is fine); a GPU makes it fast.
 """
 
+import hashlib
 import io
 import json
 import math
@@ -18,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -29,6 +31,10 @@ from prada.voice.loop import SAMPLE_RATE
 SAMPLES = 25_000  # synthetic clips of the phrase (openWakeWord recommends 20,000 or more)
 STEPS = 50_000  # training steps (openWakeWord's default)
 HF = "https://huggingface.co/datasets"
+# Hugging Face URLs name a commit, not `main`, so a file can't change under its checksum.
+FEATURES_REV = "985bf1b47e7f19c07741af82bfe32d5a9dc56096"  # davidscripka/openwakeword_features
+AUDIOSET_REV = "5a2fa42a1506470d275a47ff8e1fdac5b364e6ef"  # agkphysics/AudioSet, before Parquet
+PHONEMIZER_REV = "b5336bb41d8b1fbf32b3fd9cab779ef17d221520"  # the Space below
 
 
 @dataclass(frozen=True)
@@ -38,6 +44,7 @@ class Download:
     about: str  # what it is and roughly how big, for the setup log
     # "file"; "audio": an archive of clips, unpacked as 16 kHz mono WAVs; "code": a source tarball
     kind: str = "file"
+    sha256: str = ""  # checked after the download when set (empty: the host publishes no hash)
 
 
 # Its PyPI package leaves out `piper_train`, which the generator model needs, so use the source.
@@ -54,19 +61,31 @@ GENERATOR = Download(  # next to its .json config, which the source tarball ship
 )
 FEATURES = Download(
     "openwakeword_features_ACAV100M_2000_hrs_16bit.npy",
-    f"{HF}/davidscripka/openwakeword_features/resolve/main/openwakeword_features_ACAV100M_2000_hrs_16bit.npy",
+    f"{HF}/davidscripka/openwakeword_features/resolve/{FEATURES_REV}/openwakeword_features_ACAV100M_2000_hrs_16bit.npy",
     "2,000 hours of everyday audio as openWakeWord features (~16 GB)",
+    sha256="721a66d0682c65a1b5c1da0aa109409cede1d20e28b15235c344b000cbb7654f",
 )
 VALIDATION = Download(
     "validation_set_features.npy",
-    f"{HF}/davidscripka/openwakeword_features/resolve/main/validation_set_features.npy",
+    f"{HF}/davidscripka/openwakeword_features/resolve/{FEATURES_REV}/validation_set_features.npy",
     "11 hours of speech, noise and music to count false wakes",
+    sha256="a56a8a0f8e0efb91900acc6de4c0cdf4c564842e8475a7d49b36c039e17a690f",
 )
+# DeepPhonemizer's own S3 bucket (what openWakeWord downloads from) now answers AccessDenied, and
+# the project publishes no other copy. This is a copy of the same file in a Hugging Face Space
+# (not official: hence the pinned commit and checksum). The checkpoint is a pickle, so setup
+# only accepts it if it loads with `weights_only=True` and the allowlist in `PHONEMIZER_CLASSES`.
 PHONEMIZER = Download(
     "en_us_cmudict_forward.pt",
-    "https://public-asai-dl-models.s3.eu-central-1.amazonaws.com/DeepPhonemizer/en_us_cmudict_forward.pt",
-    "DeepPhonemizer model, for words missing from the CMU dictionary",
+    f"https://huggingface.co/spaces/mostafaashahin/Phone-aid/resolve/{PHONEMIZER_REV}/models/d_phonemizer/en_us_cmudict_forward.pt",
+    "DeepPhonemizer model, for words missing from the CMU dictionary (67 MB)",
+    sha256="c2e1fb223d7e027bf7b33052540c6f71d19db6d7fd87ab8671152b8b114501c2",
 )
+PHONEMIZER_CLASSES = (
+    "Preprocessor",
+    "SequenceTokenizer",
+    "LanguageTokenizer",
+)  # dp.preprocessing.text
 RIRS = Download(
     "rirs",
     "https://mcdermottlab.mit.edu/Reverb/IRMAudio/Audio.zip",
@@ -75,9 +94,10 @@ RIRS = Download(
 )
 BACKGROUND = Download(
     "background/audioset",
-    f"{HF}/agkphysics/AudioSet/resolve/main/data/bal_train09.tar",
-    "an AudioSet slice of background noise and music",
+    f"{HF}/agkphysics/AudioSet/resolve/{AUDIOSET_REV}/data/bal_train09.tar",  # later turned to Parquet
+    "an AudioSet slice of background noise and music (970 MB)",
     kind="audio",
+    sha256="9ab88550e77c8289acf71d19ae3f254fadad16f3cea305ef08a16949a928acf9",
 )
 DOWNLOADS = (SAMPLE_GENERATOR, GENERATOR, FEATURES, VALIDATION, PHONEMIZER, RIRS, BACKGROUND)
 
@@ -125,30 +145,82 @@ def setup() -> None:
         print(f"{d.about} ...", file=sys.stderr)
         target = root / d.name
         if d.kind == "file":
-            _fetch(d.url, target)
+            _fetch(d.url, target, d.sha256)
+            if d is PHONEMIZER:
+                _check_phonemizer(target)
             continue
         archive = root / "downloads" / d.url.rsplit("/", 1)[-1]
-        _fetch(d.url, archive)
+        _fetch(d.url, archive, d.sha256)
         (_unpack_audio if d.kind == "audio" else _unpack_code)(archive, target)
         archive.unlink()
+    _feature_models()
     print(f"Training data ready in {root}", file=sys.stderr)
 
 
-def _fetch(url: str, target: Path) -> None:
+def _feature_models() -> None:
+    """openWakeWord's trainer needs its melspectrogram and embedding models (GitHub release
+    assets) inside its package, and stops with a file error when they are missing."""
+    import openwakeword.utils
+
+    openwakeword.utils.download_models()
+
+
+def allow_phonemizer_classes() -> None:
+    """Let `torch.load(weights_only=True)` unpickle the phonemizer checkpoint's own classes
+    (and nothing else). torch 2.6 made that the default and added `add_safe_globals`, which is
+    why the `wakeword` extra needs torch>=2.6: DeepPhonemizer's own `torch.load` passes no flag."""
+    import torch.serialization
+    from dp.preprocessing import text
+
+    torch.serialization.add_safe_globals([getattr(text, name) for name in PHONEMIZER_CLASSES])
+
+
+def _check_phonemizer(path: Path) -> None:
+    """Refuse a phonemizer checkpoint that holds anything but data and the allowlisted classes."""
+    import torch
+
+    allow_phonemizer_classes()
+    try:
+        torch.load(path, map_location="cpu", weights_only=True)
+    except Exception as e:
+        path.unlink(missing_ok=True)
+        raise ValueError(
+            f"{path.name} is not a plain DeepPhonemizer checkpoint ({e}); deleted"
+        ) from e
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        while chunk := f.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _fetch(url: str, target: Path, sha256: str = "") -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     part = target.with_name(target.name + ".part")
     have = part.stat().st_size if part.exists() else 0
     request = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})
-    with urllib.request.urlopen(request, timeout=60) as response:
-        if response.status != 206:  # the server ignored the range: start over
-            have = 0
-        total = have + int(response.headers.get("Content-Length") or 0)
-        with part.open("ab" if have else "wb") as out:
-            while chunk := response.read(1 << 20):
-                out.write(chunk)
-                have += len(chunk)
-                print(f"\r  {have >> 20} / {total >> 20} MB", end="", file=sys.stderr)
-    print(file=sys.stderr)
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            if response.status != 206:  # the server ignored the range: start over
+                have = 0
+            total = have + int(response.headers.get("Content-Length") or 0)
+            with part.open("ab" if have else "wb") as out:
+                while chunk := response.read(1 << 20):
+                    out.write(chunk)
+                    have += len(chunk)
+                    print(f"\r  {have >> 20} / {total >> 20} MB", end="", file=sys.stderr)
+        print(file=sys.stderr)
+    except urllib.error.HTTPError as e:
+        if e.code != 416 or not have:  # 416: the .part is already whole; the checksum decides
+            raise
+    if sha256 and (got := _sha256(part)) != sha256:
+        part.unlink()
+        raise ValueError(
+            f"{target.name}: checksum mismatch (got {got}, expected {sha256}); deleted"
+        )
     part.replace(target)
 
 
@@ -224,6 +296,18 @@ def generate_samples(*args, **kwargs):
 '''
 
 
+# Runs openWakeWord's trainer with the phonemizer's classes allowed to unpickle.
+RUNNER = '''"""Written by `prada voice train` for openWakeWord's trainer."""
+
+import runpy
+
+from prada.voice.train import allow_phonemizer_classes
+
+allow_phonemizer_classes()
+runpy.run_module("openwakeword.train", run_name="__main__", alter_sys=True)
+'''
+
+
 def training_config(phrase: str, name: str, samples: int, steps: int, work: Path) -> dict:
     """openWakeWord's training config (see its examples/custom_model.yml)."""
     root = assets_dir()
@@ -291,7 +375,8 @@ def train(
     (work / "generate_samples.py").write_text(shim)
     config = work / "config.yaml"  # JSON is valid YAML
     config.write_text(json.dumps(training_config(phrase, name, samples, steps, work), indent=2))
-    command = [sys.executable, "-m", "openwakeword.train", "--training_config", str(config)]
+    (work / "run_trainer.py").write_text(RUNNER)
+    command = [sys.executable, str(work / "run_trainer.py"), "--training_config", str(config)]
     failed = RuntimeError("training failed (see above); run the same command to resume")
     if run([*command, "--generate_clips"], cwd=work).returncode != 0:
         raise failed
@@ -346,6 +431,6 @@ def _install_phonemizer() -> None:
     import openwakeword
 
     target = Path(openwakeword.__file__).parent / "resources" / PHONEMIZER.name
-    if not target.is_file():
+    if not target.is_file() or _sha256(target) != PHONEMIZER.sha256:  # e.g. fetched unchecked
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(assets_dir() / PHONEMIZER.name, target)

@@ -113,7 +113,7 @@ def test_finished_conversations_are_summarized_and_remembered(tmp_path, monkeypa
     assert system.startswith(persona.CHARACTER)
     assert "What you remember of earlier conversations" in system
     assert "Dana likes tea" in system
-    summary_prompt = next(m for m in seen if "remember of the conversation" in m[0]["content"])
+    summary_prompt = next(m for m in seen if "speaking to them" in m[0]["content"])
     assert summary_prompt[0]["content"].startswith(persona.CHARACTER)
     assert "User: my name is Dana" in summary_prompt[1]["content"]
 
@@ -304,3 +304,33 @@ def test_a_memory_failure_does_not_hide_the_reply(tmp_path, monkeypatch):
     monkeypatch.setattr(memory.Memory, "add", broken)
     reply = ask(n, "hi")
     assert reply.error is None and reply.text == "ok"
+
+
+def test_summary_prompt_asks_for_first_person_and_skips_drills():
+    seen = []
+
+    def chat(messages, schema, model=None):
+        seen.append(messages)
+        return json.dumps({"summary": "You told me you study Russian."})
+
+    assert memory.summarize(chat, "User: hi\nPRADA: hello") == "You told me you study Russian."
+    system, user = seen[0][0]["content"], seen[0][1]["content"]
+    assert "'I' for you and 'you' for them" in system and "never guess their gender" in system
+    assert "not facts about them" in system  # drills are exercises
+    assert user.startswith("User: hi") and user.rstrip().endswith("('I ...', 'You ...').")
+
+
+def test_recent_cuts_long_messages_and_remembered_reads_few_rows():
+    from prada.store import open_store
+
+    clock = Clock()
+    mem = memory.Memory(open_store("memory", memory.MIGRATIONS, ":memory:"), clock)
+    mem.add("q", "x" * 5000)
+    assert len(mem.recent(10)[1]["content"]) == memory.RECENT_CHARS
+    for i in range(memory.SUMMARIES_LOADED + 10):
+        with mem.db:
+            mem.db.execute(
+                "INSERT INTO memory_episode (started, ended, summary, model) VALUES (?, ?, ?, 'm')",
+                (clock(), clock(), f"s{i}"),
+            )
+    assert mem.remembered(10**6).count("\n") + 1 == memory.SUMMARIES_LOADED

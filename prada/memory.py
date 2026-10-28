@@ -44,15 +44,23 @@ MEMORY_CHARS = 1500  # budget for the summaries loaded into a prompt (about 400 
 SUMMARY_CHARS = 600  # a stored summary is cut to this
 TRANSCRIPT_CHARS = 6000  # most of an episode shown to the summarizer (the end is kept)
 MESSAGE_CHARS = 500  # each message is cut to this in that transcript
+RECENT_CHARS = 1500  # and to this when the current episode goes back into a prompt
+SUMMARIES_LOADED = 40  # most summaries read from the database for `remembered`
 
 _TASK = (
-    "You are writing down what you want to remember of the conversation below, for your "
-    "own memory, in the first person and in at most four short sentences. Keep what will "
-    "matter later: facts about the user (names, plans, preferences, what they are working "
-    "on or learning), what they asked you to remember, and anything you promised. Leave "
-    "out small talk and anything you are not sure of. Only say you did something if the "
-    "conversation shows it happened. Fill the JSON object matching the provided schema."
+    "You are writing down what you want to remember of a conversation you just had with the "
+    "user, for your own memory, in at most four short sentences. Write it as yourself, "
+    "speaking to them: 'I' for you and 'you' for them, for example 'You told me you are "
+    "learning Russian. I promised to quiz you on cases.' Never write 'he', 'she', 'they' or "
+    "'the user' for them, and never guess their gender. Keep what will matter later: facts "
+    "about them (names, plans, preferences, what they are working on or learning), what they "
+    "asked you to remember, and anything you promised. Practice sentences they wrote for a "
+    "language drill are exercises, not facts about them: note the language and the kinds of "
+    "mistakes, not the sentences. Leave out small talk and anything you are not sure of. Only "
+    "say you did something if the conversation shows it happened. Fill the JSON object "
+    "matching the provided schema."
 )
+_ASK = "\n\nNow write what you remember, in the first person, speaking to the user ('I ...', 'You ...')."
 
 
 class Summary(BaseModel):
@@ -77,7 +85,7 @@ class Memory:
             "SELECT role, content FROM memory_turn WHERE episode = ? ORDER BY id DESC LIMIT ?",
             (row["id"], limit),
         ).fetchall()
-        return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+        return [{"role": r["role"], "content": r["content"][:RECENT_CHARS]} for r in reversed(rows)]
 
     def add(self, said: str, replied: str) -> None:
         """Store a finished turn, starting a new episode after a long silence."""
@@ -141,7 +149,8 @@ class Memory:
         rows = self.db.execute(
             "SELECT started, summary FROM memory_episode "
             "WHERE summary IS NOT NULL AND summary != '' AND model IS NOT 'fake' "
-            "ORDER BY id DESC"
+            "ORDER BY id DESC LIMIT ?",
+            (SUMMARIES_LOADED,),
         ).fetchall()
         lines, used = [], 0
         for r in rows:
@@ -157,7 +166,7 @@ def summarize(chat: Callable[..., str], transcript: str) -> str:
     """A first-person summary of a transcript, written by the model (raises if it can't)."""
     messages = [
         {"role": "system", "content": persona.system_prompt(_TASK)},
-        {"role": "user", "content": transcript},
+        {"role": "user", "content": transcript + _ASK},
     ]
     raw = chat(messages=messages, schema=Summary.model_json_schema())
     return Summary.model_validate_json(raw).summary.strip()[:SUMMARY_CHARS]
