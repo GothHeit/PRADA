@@ -6,12 +6,21 @@ once by `prada voice setup`; after that nothing here touches the network.
 """
 
 import re
+import time
 from pathlib import Path
 
 from prada.config import VoiceSettings
 from prada.store import data_dir
-from prada.voice.loop import FRAME, SAMPLE_RATE, Endpointer, split_by_language, track_noise
+from prada.voice.loop import (
+    FRAME,
+    FRAME_SECONDS,
+    SAMPLE_RATE,
+    Endpointer,
+    split_by_language,
+    track_noise,
+)
 
+SETTLE = 0.3  # seconds of mic ignored after she speaks, before listening for a follow-up
 MIN_NOISE = 100.0  # starting guess for the room's background loudness (int16 RMS)
 
 
@@ -149,13 +158,18 @@ class MicEars:
                 return word
         return None
 
-    def listen(self) -> str:
+    def listen(self, wait: float | None = None) -> str:
         import numpy as np
 
+        if not self.stream.active:
+            self.stream.start()
         # Drop what was captured during the chime, so it isn't taken for speech.
         if waiting := self.stream.read_available:
             self.stream.read(waiting)
-        end = Endpointer(self.noise, self.silence)
+        if wait is not None:  # right after she spoke: let the room's echo of her voice die out
+            for _ in range(round(SETTLE / FRAME_SECONDS)):
+                self.stream.read(FRAME)
+        end = Endpointer(self.noise, self.silence, *([] if wait is None else [wait]))
         frames = []
         for frame in self._frames():
             frames.append(frame)
@@ -174,6 +188,47 @@ def clean_transcript(text: str) -> str:
     return " ".join(re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", text).split())
 
 
+def chime_samples(rate: int = SAMPLE_RATE):
+    """The wake chime: a rising two-note ping, 0.45 s, led by a little silence so a sound
+    device that takes a moment to start (Voicemeeter) doesn't swallow the notes."""
+    import numpy as np
+
+    def note(freq: float, seconds: float):
+        t = np.arange(int(rate * seconds)) / rate
+        return np.sin(2 * np.pi * freq * t) * np.hanning(t.size) * 0.5
+
+    lead = np.zeros(int(rate * 0.15))
+    tone = np.concatenate([lead, note(660, 0.15), note(880, 0.3)])
+    return (tone * 32767).astype(np.int16)
+
+
+class Speaker:
+    """Plays int16 mono audio through output streams that stay open, one per sample rate: a
+    stream opened per sound loses its first moments to the device's start-up latency."""
+
+    def __init__(self, device):
+        self.device = device
+        self.streams = {}
+        self.last = None
+
+    def play(self, samples, rate: int) -> None:
+        import sounddevice as sd
+
+        stream = self.streams.get(rate)
+        if stream is None:
+            stream = self.streams[rate] = sd.OutputStream(
+                samplerate=rate, channels=1, dtype="int16", device=self.device
+            )
+            stream.start()
+        stream.write(samples)  # returns once buffered, not once heard
+        self.last = stream
+
+    def drain(self) -> None:
+        """Wait out what is still in the device's buffer, so the mic doesn't hear its tail."""
+        if self.last is not None:
+            time.sleep(self.last.latency + 0.05)
+
+
 class PiperMouth:
     """Speaks with Piper voices through the speakers: the main one, and per-language ones
     for sentences in another language (e.g. the tutor's Russian)."""
@@ -184,26 +239,21 @@ class PiperMouth:
         _no_telemetry()
         self.voice = PiperVoice.load(_piper_voice(s.piper_voice))
         self.voices = {lang: PiperVoice.load(_piper_voice(v)) for lang, v in s.voices.items()}
-        self.device = s.output_device
+        self.speaker = Speaker(s.output_device)
 
     def _play(self, samples, rate: int) -> None:
-        import sounddevice as sd
-
-        sd.play(samples, rate, device=self.device)
-        sd.wait()
+        self.speaker.play(samples, rate)
 
     def chime(self) -> None:
-        import numpy as np
-
-        t = np.arange(int(SAMPLE_RATE * 0.12)) / SAMPLE_RATE
-        tone = np.sin(2 * np.pi * 880 * t) * np.hanning(t.size) * 0.3
-        self._play(tone.astype(np.float32), SAMPLE_RATE)
+        self._play(chime_samples(), SAMPLE_RATE)
+        self.speaker.drain()
 
     def say(self, text: str) -> None:
         for lang, part in split_by_language(text, self.voices):
             voice = self.voices.get(lang, self.voice)
             for chunk in voice.synthesize(part):  # one sentence at a time
                 self._play(chunk.audio_int16_array, chunk.sample_rate)
+        self.speaker.drain()
 
 
 def build(s: VoiceSettings) -> tuple[MicEars, PiperMouth]:

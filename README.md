@@ -68,6 +68,7 @@ language = "auto"           # or "en", "ru", ...
 piper_voice = "en_US-amy-medium"
 input_device = "Microphone (USB Audio)"   # name or index from `prada voice devices`
 silence = 0.8               # seconds of quiet that end what you're saying
+follow_up = 6.0             # seconds she keeps listening after a reply, no wake word needed (0 = off)
 
 [voice.voices]              # sentences in these languages get their own voice
 ru = "ru_RU-irina-medium"

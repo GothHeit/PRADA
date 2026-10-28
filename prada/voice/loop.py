@@ -26,8 +26,9 @@ class Ears(Protocol):
     def wait_for_wake(self) -> str | None:
         """Block until a wake word is heard; returns its name, or None when input ended."""
 
-    def listen(self) -> str:
-        """Hear one request and return its text ("" when nothing was said)."""
+    def listen(self, wait: float | None = None) -> str:
+        """Hear one request and return its text ("" when nothing was said). `wait` is how many
+        seconds to wait for speech to begin; given, this is a follow-up straight after a reply."""
 
 
 class Mouth(Protocol):
@@ -85,23 +86,26 @@ def split_by_language(text: str, languages) -> list[tuple[str | None, str]]:
     return runs
 
 
-def run(session, ears: Ears, mouth: Mouth, once: bool = False) -> int:
-    """Wake word -> request -> node -> spoken reply, until input ends; returns an exit code."""
+def run(session, ears: Ears, mouth: Mouth, once: bool = False, follow_up: float = 0.0) -> int:
+    """Wake word -> request -> node -> spoken reply, until input ends; returns an exit code.
+
+    After a reply she keeps listening for `follow_up` seconds, so the next request needs no
+    wake word; silence for that long sends her back to waiting for one (0 turns it off)."""
     while (word := ears.wait_for_wake()) is not None:
         mouth.chime()
         text = ears.listen()
-        if not text:
-            continue
-        print(f"[{word}] you: {text}", file=sys.stderr)
-        try:
-            reply = session.send(text)
-        except NodeError as e:
-            print(f"prada: {e}", file=sys.stderr)
-            mouth.say(CANT_REACH)
-        else:
-            if reply.error:
-                print(f"prada: {reply.error}", file=sys.stderr)
-            mouth.say(WENT_WRONG if reply.error else reply.text)
-        if once:
-            break
+        while text:
+            print(f"[{word}] you: {text}", file=sys.stderr)
+            try:
+                reply = session.send(text)
+            except NodeError as e:
+                print(f"prada: {e}", file=sys.stderr)
+                mouth.say(CANT_REACH)
+            else:
+                if reply.error:
+                    print(f"prada: {reply.error}", file=sys.stderr)
+                mouth.say(WENT_WRONG if reply.error else reply.text)
+            if once:
+                return 0
+            text = ears.listen(follow_up) if follow_up > 0 else ""
     return 0

@@ -138,7 +138,7 @@ def _voice(args) -> int:
     words = ", ".join(settings.wake_words)
     print(f"PRADA is listening for: {words} (Ctrl+C to stop)", file=sys.stderr)
     try:
-        return run(session, ears, mouth, args.once)
+        return run(session, ears, mouth, args.once, settings.follow_up)
     except KeyboardInterrupt:
         return 0
     except devices.errors() as e:

@@ -87,6 +87,7 @@ class VoiceSettings:
     input_device: str | int | None = None  # sounddevice name or index; None = default
     output_device: str | int | None = None
     silence: float = 0.8  # seconds of quiet that end what you're saying
+    follow_up: float = 6.0  # seconds she keeps listening after a reply, no wake word (0 = off)
 
 
 def voice_settings() -> VoiceSettings:
@@ -106,12 +107,16 @@ def voice_settings() -> VoiceSettings:
     if not words or not all(isinstance(w, str) and w.strip() for w in words):
         raise ValueError(f"[voice] wake_words in {config_path()} must be a list of names or paths")
     try:
+        follow_up = float(file.get("follow_up", VoiceSettings.follow_up))
+        if follow_up < 0:
+            raise ValueError("follow_up must not be negative")
         return VoiceSettings(
             **{
                 **file,
                 "wake_words": tuple(words),
                 "threshold": float(file.get("threshold", VoiceSettings.threshold)),
                 "silence": float(file.get("silence", VoiceSettings.silence)),
+                "follow_up": follow_up,
             }
         )
     except (TypeError, ValueError) as e:

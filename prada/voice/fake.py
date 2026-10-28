@@ -18,7 +18,9 @@ class TextEars:
         self._line = line.strip()
         return "text"
 
-    def listen(self) -> str:
+    def listen(self, wait: float | None = None) -> str:
+        if wait is not None:
+            return ""  # follow-ups are for a microphone; every text line starts with a wake word
         return self._line
 
 

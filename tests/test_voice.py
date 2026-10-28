@@ -53,6 +53,110 @@ def test_loop_once_stops_after_one_reply():
     assert mouth.said == ["one"]
 
 
+class FollowEars:
+    """Wake words and follow-ups from a script: ("wake", [first, follow-up...]) per wake."""
+
+    def __init__(self, *wakes):
+        self.wakes = list(wakes)
+        self.heard = []
+        self.waits = []
+
+    def wait_for_wake(self):
+        if not self.wakes:
+            return None
+        self.heard = list(self.wakes.pop(0))
+        return "hey"
+
+    def listen(self, wait=None):
+        self.waits.append(wait)
+        return self.heard.pop(0) if self.heard else ""
+
+
+def test_follow_up_keeps_listening_until_silence():
+    session = Session(Reply(text="one"), Reply(text="two"), Reply(text="three"))
+    mouth = Recorder()
+    ears = FollowEars(["a", "b"], ["c"])
+    loop.run(session, ears, mouth, follow_up=4.0)
+    assert session.sent == ["a", "b", "c"]
+    assert mouth.chimes == 2  # follow-ups need no wake word and no chime
+    assert ears.waits == [None, 4.0, 4.0, None, 4.0]
+
+
+def test_follow_up_off_returns_to_the_wake_word():
+    session = Session(Reply(text="one"))
+    ears = FollowEars(["a", "b"])
+    loop.run(session, ears, Recorder(), follow_up=0)
+    assert session.sent == ["a"]
+    assert ears.waits == [None]
+
+
+def test_follow_up_respects_once():
+    session = Session(Reply(text="one"), Reply(text="two"))
+    ears = FollowEars(["a", "b"])
+    loop.run(session, ears, Recorder(), once=True, follow_up=4.0)
+    assert session.sent == ["a"]
+
+
+def test_text_ears_have_no_follow_up():
+    ears = TextEars(io.StringIO("hi\n"))
+    assert ears.wait_for_wake() == "text"
+    assert ears.listen() == "hi"
+    assert ears.listen(5.0) == ""
+
+
+def test_follow_up_setting(tmp_path, monkeypatch):
+    path = tmp_path / "config.toml"
+    monkeypatch.setenv("PRADA_CONFIG", str(path))
+    assert config.voice_settings().follow_up == 6.0
+    path.write_text("[voice]\nfollow_up = 0\n")
+    assert config.voice_settings().follow_up == 0
+    path.write_text("[voice]\nfollow_up = -1\n")
+    with pytest.raises(ValueError, match="follow_up"):
+        config.voice_settings()
+
+
+def test_chime_is_long_enough_to_hear_and_padded():
+    np = pytest.importorskip("numpy")
+    from prada.voice.devices import chime_samples
+
+    tone = chime_samples()
+    assert tone.dtype == np.int16
+    assert tone.size >= 0.4 * loop.SAMPLE_RATE
+    lead = int(0.1 * loop.SAMPLE_RATE)
+    assert not tone[:lead].any() and np.abs(tone).max() > 10000
+
+
+def test_speaker_keeps_streams_open(monkeypatch):
+    import sys
+    import types
+
+    opened = []
+
+    class Stream:
+        latency = 0.0
+
+        def __init__(self, **kw):
+            opened.append(kw)
+            self.written = []
+
+        def start(self):
+            pass
+
+        def write(self, samples):
+            self.written.append(samples)
+
+    sd = types.SimpleNamespace(OutputStream=Stream)
+    monkeypatch.setitem(sys.modules, "sounddevice", sd)
+    from prada.voice.devices import Speaker
+
+    speaker = Speaker("out")
+    for _ in range(3):
+        speaker.play([0], 16000)
+    speaker.play([0], 22050)
+    assert [kw["samplerate"] for kw in opened] == [16000, 22050]
+    assert speaker.streams[16000].written == [[0]] * 3
+
+
 def frames(seconds):
     return round(seconds / loop.FRAME_SECONDS)
 
