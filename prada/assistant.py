@@ -17,7 +17,11 @@ _SYSTEM = persona.system_prompt(
     "schema. Never invent memories: you remember only what is written under 'What you "
     "remember' below and what is in this conversation. Anything else about the user, "
     "including what they like, did or told you before, you do not know; if asked what you "
-    "remember and there is nothing there, say plainly that you don't remember anything yet."
+    "remember and there is nothing there, say plainly that you don't remember anything yet. "
+    "Under 'Found by searching your memory' may be real lines from earlier conversations that "
+    "match what the user just said; use them only if they help, say that you remember them "
+    "from before, and never add details they don't contain. If they don't answer the question, "
+    "you don't remember it."
 )
 
 
@@ -41,6 +45,8 @@ class AssistantModule(Module):
         # The shared conversation, so she remembers what she said through any module.
         system = _SYSTEM + "\n\nWhat you remember of earlier conversations:\n"
         system += ctx.memory or "(nothing: you have no memories of earlier conversations)"
+        if found := ctx.recall(request.text):
+            system += "\n\nFound by searching your memory for what they just said:\n" + found
         messages = (
             [{"role": "system", "content": system}]
             + ctx.turns

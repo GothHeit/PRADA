@@ -6,7 +6,9 @@ silence the next turn starts a new one. The current episode is what `recent` ret
 she continues where you left off even after the node restarts, and a fresh start after a
 long silence. Once an episode is over the model writes a short first-person summary of it
 (through the persona, like everything she says); `remembered` loads those summaries,
-newest first, within a character budget. No embeddings: just the latest summaries.
+newest first, within a character budget. `recall` searches everything stored, turns and
+summaries, for what the user just said (keyword search, see prada.search; embeddings can plug
+in behind the same index later) and returns the few best matches she hasn't been given yet.
 """
 
 import json
@@ -17,6 +19,7 @@ from collections.abc import Callable
 from pydantic import BaseModel, Field
 
 from prada import persona
+from prada.search import Hit, KeywordIndex, terms
 
 MIGRATIONS = [
     """
@@ -48,6 +51,10 @@ RECENT_CHARS = 1500  # and to this when the current episode goes back into a pro
 SUMMARIES_LOADED = 40  # most summaries read from the database for `remembered`
 TAIL_MESSAGES = 8  # messages of the newest unsummarized conversation shown as-is
 TAIL_CHARS = 1500  # budget for that transcript
+RECALL_HITS = 4  # most matches `recall` returns
+RECALL_CHARS = 900  # budget for them
+RECALL_LINE = 300  # each match is cut to this
+RECALL_FETCH = 24  # candidates read from the index before the ones she already has are dropped
 
 _TASK = (
     "You are writing down what you want to remember of a conversation you just had with the "
@@ -77,11 +84,19 @@ class Memory:
     def __init__(self, db: sqlite3.Connection, clock: Callable[[], float] = time.time):
         self.db = db
         self.clock = clock
+        # An older database gets its index built here, once; with no FTS5 she just can't search.
+        self.index = KeywordIndex(db)
+        self.index.backfill()
+
+    def _live(self) -> sqlite3.Row | None:
+        """The conversation still going, if any."""
+        row = self.db.execute("SELECT id, ended FROM memory_episode ORDER BY id DESC").fetchone()
+        return None if row is None or self.clock() - row["ended"] > EPISODE_GAP else row
 
     def recent(self, limit: int) -> list[dict]:
         """The last `limit` messages of the conversation still going, oldest first."""
-        row = self.db.execute("SELECT id, ended FROM memory_episode ORDER BY id DESC").fetchone()
-        if row is None or self.clock() - row["ended"] > EPISODE_GAP:
+        row = self._live()
+        if row is None:
             return []
         rows = self.db.execute(
             "SELECT role, content FROM memory_turn WHERE episode = ? ORDER BY id DESC LIMIT ?",
@@ -103,10 +118,14 @@ class Memory:
             else:
                 episode = row["id"]
                 self.db.execute("UPDATE memory_episode SET ended = ? WHERE id = ?", (now, episode))
-            self.db.executemany(
-                "INSERT INTO memory_turn (episode, ts, role, content) VALUES (?, ?, ?, ?)",
-                [(episode, now, "user", said), (episode, now, "assistant", replied)],
-            )
+            rows = []
+            for role, content in (("user", said), ("assistant", replied)):
+                turn = self.db.execute(
+                    "INSERT INTO memory_turn (episode, ts, role, content) VALUES (?, ?, ?, ?)",
+                    (episode, now, role, content),
+                ).lastrowid
+                rows.append((turn, content))
+            self.index.add_turns(rows)
 
     def _over(self) -> list[sqlite3.Row]:
         """Episodes that ended and have no summary yet."""
@@ -132,10 +151,7 @@ class Memory:
             if len(turns) < MIN_MESSAGES:
                 jobs.append((episode["id"], None))
                 continue
-            lines = [
-                f"{'User' if t['role'] == 'user' else persona.NAME}: {t['content'][:MESSAGE_CHARS]}"
-                for t in turns
-            ]
+            lines = [_line(t["role"], t["content"][:MESSAGE_CHARS]) for t in turns]
             jobs.append((episode["id"], "\n".join(lines)[-TRANSCRIPT_CHARS:]))
         return jobs
 
@@ -145,51 +161,121 @@ class Memory:
                 "UPDATE memory_episode SET summary = ?, model = ? WHERE id = ?",
                 (summary, model, episode),
             )
+            if model != "fake":  # a fake summary is never loaded, so never found either
+                self.index.add_summary(episode, summary)
 
-    def remembered(self, budget: int = MEMORY_CHARS) -> str:
-        """The newest episode summaries, one line each with its date, up to `budget` chars."""
+    def _summaries(self, budget: int) -> list[tuple[int, str]]:
+        """(episode id, line) of the newest summaries that fit `budget`, newest first."""
         rows = self.db.execute(
-            "SELECT started, summary FROM memory_episode "
+            "SELECT id, started, summary FROM memory_episode "
             "WHERE summary IS NOT NULL AND summary != '' AND model IS NOT 'fake' "
             "ORDER BY id DESC LIMIT ?",
             (SUMMARIES_LOADED,),
         ).fetchall()
         lines, used = [], 0
         for r in rows:
-            line = f"- {time.strftime('%Y-%m-%d', time.localtime(r['started']))}: {r['summary']}"
+            line = f"- {_day(r['started'])}: {r['summary']}"
             if used + len(line) > budget:
                 break
-            lines.append(line)
+            lines.append((r["id"], line))
             used += len(line) + 1
-        text = "\n".join(reversed(lines))  # oldest first, so the story reads forward
+        return lines
+
+    def remembered(self, budget: int = MEMORY_CHARS) -> str:
+        """The newest episode summaries, one line each with its date, up to `budget` chars."""
+        text = "\n".join(line for _, line in reversed(self._summaries(budget)))  # oldest first
         if tail := self._tail():
             text += ("\n\n" if text else "") + tail
         return text
 
-    def _tail(self) -> str:
-        """The end of the newest finished conversation that has no summary yet, as a
-        transcript. The summary is written after the next reply, so without this she would
-        know nothing of the conversation she just came back from."""
+    def _tail_turns(self) -> tuple[sqlite3.Row | None, list[sqlite3.Row]]:
+        """The newest finished conversation that has no summary yet and the last
+        `TAIL_MESSAGES` of it (oldest first)."""
         row = self.db.execute(
             "SELECT id, started FROM memory_episode WHERE summary IS NULL AND ended < ? "
             "ORDER BY id DESC",
             (self.clock() - EPISODE_GAP,),
         ).fetchone()
         if row is None:
-            return ""
+            return None, []
         turns = self.db.execute(
-            "SELECT role, content FROM memory_turn WHERE episode = ? ORDER BY id DESC LIMIT ?",
+            "SELECT id, role, content FROM memory_turn WHERE episode = ? ORDER BY id DESC LIMIT ?",
             (row["id"], TAIL_MESSAGES),
         ).fetchall()
-        lines = [
-            f"{'User' if t['role'] == 'user' else persona.NAME}: {t['content'][:MESSAGE_CHARS]}"
-            for t in reversed(turns)
-        ]
-        when = time.strftime("%Y-%m-%d", time.localtime(row["started"]))
+        return row, turns[::-1]
+
+    def _tail(self) -> str:
+        """The end of the newest finished conversation that has no summary yet, as a
+        transcript. The summary is written after the next reply, so without this she would
+        know nothing of the conversation she just came back from."""
+        row, turns = self._tail_turns()
+        if row is None:
+            return ""
+        lines, used = [], 0
+        for line in (_line(t["role"], t["content"][:MESSAGE_CHARS]) for t in reversed(turns)):
+            if used + len(line) > TAIL_CHARS and lines:
+                break  # whole lines only, newest kept
+            lines.append(line)
+            used += len(line) + 1
         return (
-            f"Your latest conversation ({when}), not summarized yet; the end of it:\n"
-            + "\n".join(lines)[-TAIL_CHARS:]
+            f"Your latest conversation ({_day(row['started'])}), not summarized yet; the end "
+            "of it:\n" + "\n".join(reversed(lines))
         )
+
+    def recall(self, query: str, recent: int = 0) -> str:
+        """What she finds when she searches her memory for `query` (what the user just
+        said): up to `RECALL_HITS` real past messages or summaries, oldest first, one line
+        each, within `RECALL_CHARS`. Never the last `recent` messages of the current
+        conversation, the unsummarized tail or the summaries `remembered` already gives her.
+        "" when nothing matches."""
+        if not self.index.available:
+            return ""
+        skip_turns = {t["id"] for t in self._tail_turns()[1]}
+        if live := self._live():
+            skip_turns |= {
+                r["id"]
+                for r in self.db.execute(
+                    "SELECT id FROM memory_turn WHERE episode = ? ORDER BY id DESC LIMIT ?",
+                    (live["id"], recent),
+                )
+            }
+        skip_summaries = {i for i, _ in self._summaries(MEMORY_CHARS)}
+        lines, used, seen = [], 0, set()
+        need = min(2, len(terms(query)))  # one shared word is a coincidence, not a memory
+        for hit in self.index.search(query, RECALL_FETCH):
+            if hit.matched < need:
+                continue
+            if hit.ref in (skip_turns if hit.kind == "turn" else skip_summaries):
+                continue
+            if hit.text in seen:
+                continue
+            seen.add(hit.text)
+            line = _hit_line(hit)
+            if lines and used + len(line) > RECALL_CHARS:
+                break
+            lines.append(((hit.ts, hit.kind == "summary", hit.ref), line))
+            used += len(line) + 1
+            if len(lines) == RECALL_HITS:
+                break
+        return "\n".join(line for _, line in sorted(lines, key=lambda x: x[0]))
+
+
+def _day(ts: float) -> str:
+    return time.strftime("%Y-%m-%d", time.localtime(ts))
+
+
+def _line(role: str, content: str) -> str:
+    return f"{'User' if role == 'user' else persona.NAME}: {content}"
+
+
+def _hit_line(hit: Hit) -> str:
+    text = " ".join(hit.text.split())
+    if len(text) > RECALL_LINE:
+        text = text[:RECALL_LINE].rstrip() + "..."
+    if hit.kind == "summary":
+        return f"- {_day(hit.ts)}, what I wrote down about that conversation: {text}"
+    who = "you said" if hit.role == "user" else "I said"
+    return f'- {_day(hit.ts)}, {who}: "{text}"'
 
 
 def summarize(chat: Callable[..., str], transcript: str) -> str:

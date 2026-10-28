@@ -51,6 +51,9 @@ class Context:
     # What PRADA remembers of earlier conversations (episode summaries, newest first,
     # within a budget); "" when there is nothing yet. Read-only.
     memory: str = ""
+    # Searches her memory of earlier conversations for a message and returns the few best
+    # matches as lines of text ("" if none); the tutor never calls it. Read-only.
+    recall: Callable[[str], str] = lambda text: ""  # noqa: E731
 
 
 class Module:

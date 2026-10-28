@@ -121,6 +121,7 @@ class Node:
             state=session.setdefault(module.name, {}),
             turns=memory.recent(MAX_TURNS),
             memory=memory.remembered(),
+            recall=lambda text: memory.recall(text, MAX_TURNS),
         )
 
     def _answer(self, request: Request, session: dict, memory: Memory) -> Reply | None:
