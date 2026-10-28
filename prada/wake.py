@@ -3,7 +3,7 @@
 from typing import Literal
 
 from prada import config, persona, wol
-from prada.actions import Action, Executor
+from prada.actions import Action, Executor, Risk
 from prada.module import Context, Module, Reply, Request
 
 
@@ -19,6 +19,7 @@ class SendWake(Action):
 
 class SendWakeExecutor(Executor):
     action = SendWake
+    risk = Risk.IRREVERSIBLE  # a packet can't be taken back, and it powers up a machine
 
     def run(self, action: SendWake, ctx: Context) -> dict:
         wol.send_magic_packet(action.mac, action.broadcast, action.port)

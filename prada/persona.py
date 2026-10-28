@@ -18,6 +18,18 @@ def waking() -> str:
     return "Okay, I sent the wake signal to your PC. Give it a moment to stretch."
 
 
+def declined() -> str:
+    return "Okay, I won't. Nothing happened."
+
+
+def not_a_yes() -> str:
+    return "I didn't take that as a yes, so I didn't do it. Ask me again if you want it."
+
+
+def timed_out() -> str:
+    return "That question timed out, so I didn't do it. Ask me again if you want it."
+
+
 def failed(what: str, reason: str) -> str:
     """What PRADA says when an action did not happen: never a claim that it did."""
     return f"I tried to {what}, but it didn't work: {reason.rstrip('. ')}."

@@ -7,6 +7,8 @@ action always comes from its `Outcome`: `Executor.done` when the check passed, o
 `persona.failed`, so a failure can never be reported as done.
 """
 
+import re
+from enum import StrEnum
 from typing import TYPE_CHECKING, ClassVar
 
 from pydantic import BaseModel, Field
@@ -15,6 +17,44 @@ from prada import persona
 
 if TYPE_CHECKING:
     from prada.module import Context
+
+
+class Risk(StrEnum):
+    """How much an executor can hurt, declared by the executor and enforced by the node.
+
+    SAFE runs freely. REVERSIBLE asks once per conversation and kind, then runs freely for
+    the rest of it. IRREVERSIBLE (and anything that reaches outside the house) asks every
+    time. The model never decides this: it only chooses an action.
+    """
+
+    SAFE = "safe"
+    REVERSIBLE = "reversible"
+    IRREVERSIBLE = "irreversible"
+
+
+_YES = re.compile(
+    r"(?:yes|yeah|yep|yup|sure|ok|okay|please|go ahead|do it|go for it|confirm|confirmed"
+    r"|that's right|that is right|correct|affirmative)(?:[ ,]+(?:please|do it|go ahead|prada|thanks"
+    r"|thank you|yes|sure|okay|ok))*",
+    re.IGNORECASE,
+)
+_NO = re.compile(
+    r"(?:no|nope|nah|cancel|stop|don't|do not|never ?mind|not now|wait|abort|negative)"
+    r"(?:[ ,]+(?:please|thanks|thank you|prada|don't|do not|do it|stop|cancel|that|it))*",
+    re.IGNORECASE,
+)
+
+
+def answer(text: str) -> bool | None:
+    """True / False if `text` is a plain yes / no to a question, else None. Read from what
+    the person said, never from model output; anything longer or vaguer is not an answer."""
+    t = re.sub(r"[^\w' ]+", " ", text.lower()).strip()
+    t = re.sub(r"\s+", " ", t)
+    if _YES.fullmatch(t):
+        return True
+    if _NO.fullmatch(t):
+        return False
+    return None
 
 
 class Action(BaseModel):
@@ -47,6 +87,12 @@ class Executor:
     against the world (raise ActionFailed if it doesn't hold), `done` says it happened."""
 
     action: ClassVar[type[Action]]
+    risk: ClassVar[Risk] = Risk.SAFE
+
+    def ask(self, action: Action) -> str:
+        """The question PRADA puts to the person before a risky action runs, with this
+        action's real values."""
+        return f"Should I {action.describe()}?"
 
     def run(self, action: Action, ctx: "Context") -> dict:
         raise NotImplementedError

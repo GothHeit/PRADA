@@ -140,7 +140,9 @@ def test_wake_module(monkeypatch):
     sent = []
     monkeypatch.setattr("prada.wol.send_magic_packet", lambda *a: sent.append(a))
     monkeypatch.setenv("PRADA_WAKE_MAC", "aa:bb:cc:dd:ee:ff")
-    reply = Node([WakeModule()]).handle(Request(text="wake up"))
+    node = Node([WakeModule()])
+    node.handle(Request(text="wake up", session="s"))
+    reply = node.handle(Request(text="yes", session="s"))
     assert reply.error is None and sent == [("aa:bb:cc:dd:ee:ff", "255.255.255.255", 9)]
 
 
@@ -353,7 +355,9 @@ def test_persona_is_shared_by_assistant_wake_and_tutor(monkeypatch):
 
     monkeypatch.setattr("prada.wol.send_magic_packet", lambda *a: None)
     monkeypatch.setenv("PRADA_WAKE_MAC", "aa:bb:cc:dd:ee:ff")
-    reply = Node([WakeModule()]).handle(Request(text="wake up"))
+    node = Node([WakeModule()])
+    node.handle(Request(text="wake up", session="s"))
+    reply = node.handle(Request(text="yes", session="s"))
     assert reply.text == persona.waking()
 
     prompt = build_system_prompt(get_language("fr"))

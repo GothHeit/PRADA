@@ -7,6 +7,12 @@ share the model or a database connection concurrently. Each finished turn is add
 shared conversation, so every module sees what PRADA has said, whoever said it. The
 conversation lives in the store (prada.memory), so it survives restarts; summaries of finished
 conversations are written in the background and loaded into `Context.memory`.
+
+The node, not the model, decides whether an action may run: each executor declares a
+`Risk` (prada.actions). A risky action is held, PRADA asks about it with the real values, and
+only the person's next request can confirm it (a plain yes) or cancel it (a no, anything
+else, or `PENDING_TTL` seconds of silence). Every action's end is appended to the action log
+(prada.actionlog).
 """
 
 import sqlite3
@@ -15,8 +21,12 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
+from dataclasses import dataclass
 
-from prada import actions, llm, router
+from prada import actionlog, actions, llm, persona, router
+from prada.actionlog import MIGRATIONS as LOG_MIGRATIONS
+from prada.actionlog import ActionLog
+from prada.actions import Risk
 from prada.memory import MIGRATIONS as MEMORY_MIGRATIONS
 from prada.memory import Memory, summarize
 from prada.memory import fake_chat as memory_fake_chat
@@ -27,6 +37,17 @@ KEEP_ALIVE = "30m"  # how long Ollama keeps the model loaded between requests
 MAX_SESSIONS = 64
 SUMMARY_RETRY = 5 * 60  # seconds before trying again after a summary failed
 MAX_TURNS = 20  # messages of the current conversation given to a module
+PENDING_TTL = 60  # seconds a question about a risky action stays open
+SHORT_ANSWER_WORDS = 4  # a reply this short to a held question is never routed as chat
+
+
+@dataclass
+class Pending:
+    """Actions held until the person answers; `risks` parallels `held`."""
+
+    module: str
+    held: list[actions.Action]
+    asked_at: float
 
 
 def default_modules() -> list[Module]:
@@ -54,6 +75,9 @@ class Node:
         self._memory: Memory | None = None
         self._summarizing = False
         self._retry_at = 0.0
+        self._log: ActionLog | None = None
+        self._pending: dict[str | None, Pending] = {}  # by session id
+        self._trusted: dict[str | None, set[str]] = {}  # kinds a session confirmed (reversible)
         self.modules = {m.name: m for m in (modules or default_modules())}
         self._db_path = db_path
         self._dbs: dict[str, sqlite3.Connection | None] = {}
@@ -70,19 +94,17 @@ class Node:
             try:
                 session = self._session(request.session)
                 memory = self._mem()
+                if (reply := self._answer(request, session, memory)) is not None:
+                    name = reply.module
+                    self._remember(memory, request.text, reply)
+                    return reply
                 if name is None:
                     name, request = self._route(request, session.get("current"))
                 module = self.modules.get(name)
                 if module is None:
                     return Reply(module=name, error=f"no module named {name!r}")
-                ctx = Context(
-                    chat=self._chat(module.fake_chat),
-                    db=self._db(module),
-                    state=session.setdefault(name, {}),
-                    turns=memory.recent(MAX_TURNS),
-                    memory=memory.remembered(),
-                )
-                reply = self._act(module, module.handle(request, ctx), ctx)
+                ctx = self._context(module, session, memory)
+                reply = self._act(module, module.handle(request, ctx), ctx, request.session)
                 session["current"] = name
                 self._remember(memory, request.text, reply)
                 return reply
@@ -91,19 +113,114 @@ class Node:
             finally:
                 self._summarize_later()
 
-    def _act(self, module: Module, reply: Reply, ctx: Context) -> Reply:
+    def _context(self, module: Module, session: dict, memory: Memory) -> Context:
+        return Context(
+            chat=self._chat(module.fake_chat),
+            db=self._db(module),
+            state=session.setdefault(module.name, {}),
+            turns=memory.recent(MAX_TURNS),
+            memory=memory.remembered(),
+        )
+
+    def _answer(self, request: Request, session: dict, memory: Memory) -> Reply | None:
+        """Handle a request that answers a held action or asks about the action log; None
+        when it is neither and should be routed as usual. A held action is settled by the
+        very next request: yes runs it, anything else drops it."""
+        pending = self._pending.pop(request.session, None)
+        if pending is not None:
+            module = self.modules[pending.module]
+            fresh = self._clock() - pending.asked_at <= PENDING_TTL
+            yes = actions.answer(request.text) if fresh else None
+            if yes:
+                ctx = self._context(module, session, memory)
+                self._trusted.setdefault(request.session, set()).update(
+                    a.kind for a in pending.held
+                )
+                outcomes = [self._do(module, a, ctx, confirmed=True) for a in pending.held]
+                said = " ".join(dict.fromkeys(o.said for o in outcomes if o.said))
+                return Reply(module=module.name, text=said, outcomes=outcomes)
+            status = "declined" if yes is False else "expired"
+            for a in pending.held:
+                self._record(module, a, status=status)
+            if yes is False:
+                return Reply(module=module.name, text=persona.declined())
+            # A short reply is probably a yes or no in words she doesn't know ("sim", "yes,
+            # but not now") or a late yes. Routed as chat, the model could answer "done"
+            # to her own question, so settle it here: nothing ran, and she says so.
+            if len(request.text.split()) <= SHORT_ANSWER_WORDS:
+                text = persona.timed_out() if not fresh else persona.not_a_yes()
+                return Reply(module=module.name, text=text)
+        if request.module is None and (when := actionlog.asks_for_log(request.text)):
+            return Reply(module="actions", text=self._actions().day(when))
+        return None
+
+    def _act(self, module: Module, reply: Reply, ctx: Context, sid: str | None) -> Reply:
         """Run the reply's actions with the module's own executors; what PRADA says about
-        each one comes from its outcome, after the result was checked."""
+        each one comes from its outcome, after the result was checked. Actions whose risk
+        needs the person's yes are held and asked about instead."""
         if not reply.actions:
             return reply
         allowed = {actions.kind_of(e.action): e for e in module.executors}
-        outcomes = [actions.execute(a, allowed.get(a.kind), ctx) for a in reply.actions]
-        said = list(dict.fromkeys(o.said for o in outcomes if o.said))  # one line per kind
-        # The module's own words come first, but never next to a failure: it may have
-        # written them assuming the action would work.
-        lead = [] if any(not o.ok for o in outcomes) else [reply.text]
-        text = " ".join(t for t in [*lead, *said] if t)
+        outcomes, held = [], []
+        for a in reply.actions:
+            ex = allowed.get(a.kind)
+            if ex is not None and self._needs_yes(ex, a, sid):
+                held.append(a)
+            else:
+                outcomes.append(self._do(module, a, ctx, confirmed=False))
+        said = [o.said for o in outcomes if o.said]
+        if held:
+            self._pending[sid] = Pending(module.name, held, self._clock())
+            said += [allowed[a.kind].ask(a) for a in held]
+        # The module's own words come first, but never next to a failure or a question: it
+        # may have written them assuming the action would work.
+        lead = [] if held or any(not o.ok for o in outcomes) else [reply.text]
+        text = " ".join(t for t in [*lead, *dict.fromkeys(said)] if t)  # one line per kind
         return reply.model_copy(update={"text": text, "actions": [], "outcomes": outcomes})
+
+    def _needs_yes(self, executor: actions.Executor, action: actions.Action, sid) -> bool:
+        if executor.risk is Risk.SAFE or not isinstance(action, executor.action):
+            return False  # an action the executor can't run is refused, not asked about
+        if executor.risk is Risk.REVERSIBLE:
+            return action.kind not in self._trusted.get(sid, ())
+        return True
+
+    def _do(self, module: Module, action: actions.Action, ctx: Context, confirmed: bool):
+        allowed = {actions.kind_of(e.action): e for e in module.executors}
+        executor = allowed.get(action.kind)
+        outcome = actions.execute(action, executor, ctx)
+        refused = executor is None or not isinstance(action, executor.action)
+        status = "refused" if refused else "done" if outcome.ok else "failed"
+        self._record(module, action, executor, status, confirmed, outcome.error)
+        return outcome
+
+    def _record(self, module, action, executor=None, status="done", confirmed=False, error=None):
+        if executor is None:
+            executor = next((e for e in module.executors if isinstance(action, e.action)), None)
+        risk = executor.risk if executor else Risk.SAFE
+        try:
+            self._actions().add(
+                module.name,
+                action.model_dump(mode="json"),
+                action.describe(),
+                risk.value,
+                confirmed,
+                status,
+                error,
+            )
+        except sqlite3.Error as e:
+            # The action already ran (or didn't): the user must still hear what happened.
+            print(f"actions: could not log this action ({e})", file=sys.stderr)
+
+    def _actions(self) -> ActionLog:
+        if self._log is None:
+            try:
+                db = open_store("actionlog", LOG_MIGRATIONS, self._db_path)
+            except (sqlite3.Error, OSError, RuntimeError) as e:
+                print(f"actions: the action log won't be kept ({e})", file=sys.stderr)
+                db = open_store("actionlog", LOG_MIGRATIONS, ":memory:")
+            self._log = ActionLog(db, self._clock)
+        return self._log
 
     def _remember(self, memory: Memory, said: str, reply: Reply) -> None:
         if reply.error or not reply.text:

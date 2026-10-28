@@ -142,7 +142,10 @@ def test_wake_is_an_action(monkeypatch):
     sent = []
     monkeypatch.setattr("prada.wol.send_magic_packet", lambda *a: sent.append(a))
     monkeypatch.setenv("PRADA_WAKE_MAC", "aa:bb:cc:dd:ee:ff")
-    reply = Node([WakeModule()]).handle(Request(text="wake up"))
+    node = Node([WakeModule()])
+    asked = node.handle(Request(text="wake up", session="s"))
+    assert asked.text == "Should I wake your PC up?" and not sent
+    reply = node.handle(Request(text="yes", session="s"))
     assert reply.text == persona.waking() and reply.outcomes[0].ok and len(sent) == 1
 
 
@@ -152,7 +155,9 @@ def test_failed_wake_is_not_claimed(monkeypatch):
 
     monkeypatch.setattr("prada.wol.send_magic_packet", refuse)
     monkeypatch.setenv("PRADA_WAKE_MAC", "aa:bb:cc:dd:ee:ff")
-    reply = Node([WakeModule()]).handle(Request(text="wake up"))
+    node = Node([WakeModule()])
+    node.handle(Request(text="wake up", session="s"))
+    reply = node.handle(Request(text="yes", session="s"))
     assert reply.text == persona.failed("wake your PC up", "network is unreachable")
 
 
