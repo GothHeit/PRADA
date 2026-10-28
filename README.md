@@ -16,9 +16,9 @@ prada tutor       # talk to the tutor directly
 
 The node keeps the model loaded between requests, and the CLI is a thin client of it. If no node is running the CLI works in-process instead, so every command also works on its own. Write `/tutor ...` or `/wake` in `prada chat` to skip the router. The port comes from `--port`, `PRADA_NODE_PORT` or `[node] port` in the config file.
 
-## Start at Windows login
+## Start at boot
 
-On a Windows PC the brain (`prada node` and Ollama) lives in WSL, and a Task Scheduler task starts it each time you log in, with no window. Set up the repo in WSL first (a `.venv` with `pip install -e .`), then, from an elevated PowerShell:
+On a Windows PC the brain (`prada node` and Ollama) lives in WSL, and a Task Scheduler task starts it when Windows boots, before anyone logs in (no autologin), and checks on it after every wake from sleep. Set up the repo in WSL first (a `.venv` with `pip install -e .`), then, from an elevated PowerShell:
 
 ```powershell
 cd \\wsl$\Ubuntu\home\you\projetos\PRADA\windows
@@ -27,7 +27,21 @@ powershell -ExecutionPolicy Bypass -File .\check-node.ps1          # is the node
 powershell -ExecutionPolicy Bypass -File .\uninstall-autostart.ps1 # remove the task and stop the node
 ```
 
-Run from a `\\wsl$` path, the install script works out the distro and repo path itself; otherwise pass `-Distro Ubuntu -RepoPath /home/you/projetos/PRADA`. `-Port` changes the port. The task runs `scripts/start-node.sh`, which starts Ollama if it isn't already running and then the node; logs go to `~/.local/share/prada/node.log` and `ollama.log` in WSL. Inside WSL, `prada health [--wait 30]` does the same check as `check-node.ps1`. Windows reaches the node through WSL's localhost forwarding (on by default). Microphone and speakers run on the Windows side, talking to this node (see [Voice](#voice)).
+To run without you logged in, the task stores your Windows password: the install script asks for it once (for a Microsoft account, the account password, not the PIN). If you change that password, run the install script again. `-S4U` registers the task without a password, but WSL may not start under that logon; `check-node.ps1` shows the task's last result if it doesn't. Running the script again also replaces the older start-at-login task.
+
+Run from a `\\wsl$` path, the install script works out the distro and repo path itself; otherwise pass `-Distro Ubuntu -RepoPath /home/you/projetos/PRADA`. `-Port` changes the port. The task runs `scripts/start-node.sh`, which starts Ollama if it isn't already running and then the node; logs go to `~/.local/share/prada/node.log` and `ollama.log` in WSL. It starts 30 s after boot and runs again 15 s after each wake: a node that survived sleep is left alone, one that died is started again. Inside WSL, `prada health [--wait 30]` does the same check as `check-node.ps1`. Windows reaches the node through WSL's localhost forwarding (on by default). Microphone and speakers run on the Windows side, talking to this node (see [Voice](#voice)); that part still starts at login.
+
+### Sleep and Wake-on-LAN
+
+The PC can sleep when idle and be woken over the network (by `prada wake` from another machine, later by a Raspberry Pi). `setup-sleep-wake.ps1` sets the Windows side, from an elevated PowerShell (`-DryRun` only shows the changes):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup-sleep-wake.ps1 -SleepMinutes 30
+```
+
+It makes the power plan sleep after that many idle minutes on AC and never hibernate on its own (most network cards can't wake from hibernation), and lets each wired card wake the PC for a magic packet only, not for ordinary traffic. It prints the old timeouts first and ends with the card's MAC address, which goes in the waker's `[wake] mac`. To undo, run `powercfg /change standby-timeout-ac <old minutes>` (and `hibernate-timeout-ac`), and untick the wake options on the card's Power Management tab in Device Manager. Wake-on-LAN needs Ethernet; Wi-Fi rarely supports it.
+
+Nothing is changed in the BIOS/UEFI. If the PC doesn't wake, check there (names vary by board): turn on "Wake on LAN" / "Power On By PCI-E" / "Resume by PCI-E device", and turn off "ErP" / "EuP Ready" / "Deep Sleep", which cut power to the card. `powercfg /a` (printed by the script) shows whether the PC uses classic sleep (S3) or Modern Standby (S0); with Modern Standby, waking depends on the card and driver. Windows Fast Startup only matters for waking a PC that was shut down, not one that sleeps.
 
 ## Voice
 

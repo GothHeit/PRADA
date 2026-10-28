@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Stop starting the PRADA home node at logon, and stop the running node.
+Stop starting the PRADA home node at boot, and stop the running node.
 
 .PARAMETER Distro
 WSL distribution the node runs in. Defaults to the one in the script's \\wsl$ path, or

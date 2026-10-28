@@ -1,7 +1,7 @@
 #!/bin/sh
-# Start the PRADA home node inside WSL; the Windows logon task runs this.
+# Start the PRADA home node inside WSL; the Windows boot task runs this.
 # If systemd manages Ollama (the official installer's ollama.service, with its own model store),
-# leave it to systemd: it may still be booting at logon, and a second `ollama serve` as this user
+# leave it to systemd: it may still be starting, and a second `ollama serve` as this user
 # would look in ~/.ollama and not find the models. Otherwise start Ollama if nothing answers on
 # its port. Then run the node in the foreground,
 # so the task (and the WSL distro) stays up for as long as the node does.

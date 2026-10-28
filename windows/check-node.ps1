@@ -30,6 +30,12 @@ if ($task) {
     $info = $task | Get-ScheduledTaskInfo
     Write-Host "Task '$TaskName' is $($task.State) (last result $($info.LastTaskResult))."
     Write-Host "Node log in WSL: ~/.local/share/prada/node.log"
+    # 2147943726 = 0x8007052E, logon failure.
+    if ($info.LastTaskResult -eq 2147943726) {
+        Write-Host "Windows rejected the stored password: run install-autostart.ps1 again."
+    } elseif ($task.State -eq "Ready") {
+        Write-Host "Start it with: Start-ScheduledTask -TaskName '$TaskName'"
+    }
 } else {
     Write-Host "Task '$TaskName' is not installed (see windows\install-autostart.ps1)."
 }
