@@ -6,7 +6,9 @@ Early construction. The first working module is an **offline language tutor**.
 
 ## How it fits together
 
-PRADA is a **home node** that hosts modules. You talk to PRADA, and a **router** (one structured-output call) picks the module that should answer. Each module implements a small contract (`prada/module.py`): a name, a one-line description the router reads, and `handle(request) -> reply` with typed Pydantic messages. The node owns what modules share: the model client, one SQLite store (each module gets its own tables) and per-conversation state.
+PRADA is a **home node** that hosts modules. You talk to PRADA, and a **router** (one structured-output call) picks the module that should answer. Each module implements a small contract (`prada/module.py`): a name, a one-line description the router reads, and `handle(request) -> reply` with typed Pydantic messages. The node owns what modules share: the model client, one SQLite store (each module gets its own tables) and per-conversation state, including the conversation itself, so every module speaks as the same PRADA.
+
+Modules never act on the world directly. A module returns **typed actions** (Pydantic models) and lists the executors it may use; the node runs each action, checks the result (a saved note is read back, for example) and only then lets PRADA say it's done. If an action fails or isn't allowed, she says so instead. Her one hard rule, never claim something she didn't do, is enforced by the code, not just the prompt.
 
 ```bash
 prada node        # run the home node on 127.0.0.1:7723 (stdlib HTTP + JSON, localhost only)
@@ -101,6 +103,10 @@ A conversational tutor for Japanese, French, and Russian that runs entirely on y
 - **Structured output** (JSON Schema) validated with **Pydantic v2** — the model fills a typed `TutorTurn` contract instead of returning free text.
 - A **two-layer design**: a silent *analysis* layer (verdict, error type, correction, English explanation) and a *surface* layer (`spoken`) — the single natural message the student actually hears. The scaffolding stays invisible so the exchange reads as a conversation.
 - **Reasoning-first**: the schema emits a chain-of-thought field *before* the verdict, so classification follows the analysis.
+
+### Notes — things to remember
+
+Say "note that the keys are in the drawer" (or `/notes ...` in `prada chat`) and PRADA saves it to the shared store, reads it back to make sure it's there, and only then confirms. "What are my notes?" reads the last ten back.
 
 ## Quickstart
 

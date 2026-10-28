@@ -7,8 +7,6 @@ from pydantic import BaseModel, Field
 from prada import persona
 from prada.module import Context, Module, Reply, Request
 
-MAX_HISTORY = 20  # messages kept per session
-
 _SYSTEM = persona.system_prompt(
     "Answer the user's message directly and briefly, in the language they wrote it in. "
     "You have no internet access and no live data (weather, news, prices, time): if asked, "
@@ -35,16 +33,13 @@ class AssistantModule(Module):
     fake_chat = staticmethod(fake_chat)
 
     def handle(self, request: Request, ctx: Context) -> Reply:
-        history = ctx.state.setdefault("history", [])
+        # The shared conversation, so she remembers what she said through any module.
         messages = (
             [{"role": "system", "content": _SYSTEM}]
-            + history
+            + ctx.turns
             + [{"role": "user", "content": request.text}]
         )
         answer = Answer.model_validate_json(
             ctx.chat(messages=messages, schema=Answer.model_json_schema())
         )
-        history.append({"role": "user", "content": request.text})
-        history.append({"role": "assistant", "content": answer.reply})
-        del history[:-MAX_HISTORY]
         return Reply(module=self.name, text=answer.reply)
