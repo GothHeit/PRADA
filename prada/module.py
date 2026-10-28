@@ -62,6 +62,9 @@ class Module:
     fake_chat: ClassVar[Chat | None] = None
     # The actions this module may ask for; the node refuses any other.
     executors: ClassVar[list[Executor]] = []
+    # Put before her reply in the conversation memory when one of the module's actions ran,
+    # so later turns and summaries know where it came from (e.g. "[from a web search]").
+    memory_note: ClassVar[str] = ""
 
     def claims(self, text: str) -> bool:
         """True when `text` plainly continues a conversation with this module, so the router

@@ -15,6 +15,9 @@ The config file is TOML at $PRADA_CONFIG, or ~/.config/prada/config.toml:
 
     [voice.voices]
     ru = "ru_RU-irina-medium"
+
+    [web]
+    github_token = "github_pat_..."
 """
 
 import os
@@ -121,3 +124,45 @@ def voice_settings() -> VoiceSettings:
         )
     except (TypeError, ValueError) as e:
         raise ValueError(f"bad [voice] setting in {config_path()}: {e}") from e
+
+
+@dataclass(frozen=True)
+class WebSettings:
+    """The `[web]` table: where she searches. Secrets stay in the file, never in logs."""
+
+    searxng_url: str = "http://127.0.0.1:8888"  # your own SearXNG (scripts/install-searxng.sh)
+    github_token: str = ""  # optional read-only token: 30 searches a minute instead of 10
+    max_pages: int = 3  # most pages she reads per question (0-3)
+    sources: tuple[str, ...] = ("web", "reddit", "github")  # the ones she may use
+
+
+WEB_SOURCES = ("web", "reddit", "github")
+
+
+def web_settings() -> WebSettings:
+    """Resolve the web search settings from `[web]` in the config file (defaults otherwise)."""
+    file = load_config().get("web", {})
+    if not isinstance(file, dict):
+        raise ValueError(f"[web] in {config_path()} must be a table")
+    fields = WebSettings.__dataclass_fields__
+    if unknown := sorted(set(file) - set(fields)):
+        raise ValueError(f"unknown [web] setting(s) in {config_path()}: {', '.join(unknown)}")
+    sources = file.get("sources", WebSettings.sources)
+    if isinstance(sources, str):
+        sources = [sources]
+    if not isinstance(sources, list | tuple) or not set(sources) <= set(WEB_SOURCES):
+        raise ValueError(
+            f"[web] sources in {config_path()} must be some of {', '.join(WEB_SOURCES)}"
+        )
+    try:
+        max_pages = int(file.get("max_pages", WebSettings.max_pages))
+        if not 0 <= max_pages <= 3:
+            raise ValueError("max_pages must be 0 to 3")
+        return WebSettings(
+            searxng_url=str(file.get("searxng_url", WebSettings.searxng_url)).rstrip("/"),
+            github_token=str(file.get("github_token", "")),
+            max_pages=max_pages,
+            sources=tuple(sources),
+        )
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"bad [web] setting in {config_path()}: {e}") from e

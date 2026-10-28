@@ -46,7 +46,7 @@ wakeword = [
 prada = "prada.cli:main"
 
 [tool.setuptools]
-packages = ["prada", "prada.voice", "tutor"]
+packages = ["prada", "prada.voice", "prada.web", "prada.web.sources", "tutor"]
 
 [tool.setuptools.package-data]
 tutor = ["evalset/*.jsonl"]

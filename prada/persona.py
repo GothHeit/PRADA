@@ -37,3 +37,16 @@ def failed(what: str, reason: str) -> str:
 
 def noted(text: str) -> str:
     return f"Got it, I wrote that down: “{text}”."
+
+
+def offer_search() -> str:
+    """When a question would need the internet but she wasn't asked to search."""
+    return "I'd have to look that up online. Want me to search for it?"
+
+
+def search_what() -> str:
+    return "Sure, what should I look up?"
+
+
+def no_search() -> str:
+    return "Okay, I won't look it up."

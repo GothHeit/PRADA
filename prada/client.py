@@ -121,3 +121,16 @@ def repl(session, module: str | None = None, **options: str) -> int:
             print(f"prada: {reply.error}", file=sys.stderr)
         else:
             print(reply.text)
+            for line in sources(reply):
+                print(line)
+
+
+def sources(reply: Reply) -> list[str]:
+    """What a web search sent out and the sources her reply used, for the chat screen."""
+    lines = []
+    for o in reply.outcomes:
+        if o.ok and "sources" in o.data:
+            searched = ", ".join(o.data.get("searched", []))
+            lines.append(f"  searched {searched} for: {o.data.get('query', '')}")
+            lines += [f"  [{s['id']}] {s['title']}: {s['url']}" for s in o.data["sources"]]
+    return lines

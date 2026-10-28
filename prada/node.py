@@ -55,9 +55,10 @@ def default_modules() -> list[Module]:
     from prada.assistant import AssistantModule
     from prada.notes import NotesModule
     from prada.wake import WakeModule
+    from prada.web.module import WebModule
     from tutor.module import TutorModule
 
-    return [AssistantModule(), TutorModule(), WakeModule(), NotesModule()]
+    return [AssistantModule(), TutorModule(), WakeModule(), NotesModule(), WebModule()]
 
 
 class Node:
@@ -225,8 +226,12 @@ class Node:
     def _remember(self, memory: Memory, said: str, reply: Reply) -> None:
         if reply.error or not reply.text:
             return
+        text = reply.text
+        module = self.modules.get(reply.module)
+        if module is not None and module.memory_note and any(o.ok for o in reply.outcomes):
+            text = f"{module.memory_note} {text}"
         try:
-            memory.add(said, reply.text)
+            memory.add(said, text)
         except sqlite3.Error as e:
             # The actions already ran: the user must still hear what happened.
             print(f"memory: could not keep this turn ({e})", file=sys.stderr)
