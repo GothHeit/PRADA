@@ -46,6 +46,8 @@ TRANSCRIPT_CHARS = 6000  # most of an episode shown to the summarizer (the end i
 MESSAGE_CHARS = 500  # each message is cut to this in that transcript
 RECENT_CHARS = 1500  # and to this when the current episode goes back into a prompt
 SUMMARIES_LOADED = 40  # most summaries read from the database for `remembered`
+TAIL_MESSAGES = 8  # messages of the newest unsummarized conversation shown as-is
+TAIL_CHARS = 1500  # budget for that transcript
 
 _TASK = (
     "You are writing down what you want to remember of a conversation you just had with the "
@@ -159,7 +161,35 @@ class Memory:
                 break
             lines.append(line)
             used += len(line) + 1
-        return "\n".join(reversed(lines))  # oldest first, so the story reads forward
+        text = "\n".join(reversed(lines))  # oldest first, so the story reads forward
+        if tail := self._tail():
+            text += ("\n\n" if text else "") + tail
+        return text
+
+    def _tail(self) -> str:
+        """The end of the newest finished conversation that has no summary yet, as a
+        transcript. The summary is written after the next reply, so without this she would
+        know nothing of the conversation she just came back from."""
+        row = self.db.execute(
+            "SELECT id, started FROM memory_episode WHERE summary IS NULL AND ended < ? "
+            "ORDER BY id DESC",
+            (self.clock() - EPISODE_GAP,),
+        ).fetchone()
+        if row is None:
+            return ""
+        turns = self.db.execute(
+            "SELECT role, content FROM memory_turn WHERE episode = ? ORDER BY id DESC LIMIT ?",
+            (row["id"], TAIL_MESSAGES),
+        ).fetchall()
+        lines = [
+            f"{'User' if t['role'] == 'user' else persona.NAME}: {t['content'][:MESSAGE_CHARS]}"
+            for t in reversed(turns)
+        ]
+        when = time.strftime("%Y-%m-%d", time.localtime(row["started"]))
+        return (
+            f"Your latest conversation ({when}), not summarized yet; the end of it:\n"
+            + "\n".join(lines)[-TAIL_CHARS:]
+        )
 
 
 def summarize(chat: Callable[..., str], transcript: str) -> str:

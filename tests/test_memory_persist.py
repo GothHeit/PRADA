@@ -334,3 +334,39 @@ def test_recent_cuts_long_messages_and_remembered_reads_few_rows():
                 (clock(), clock(), f"s{i}"),
             )
     assert mem.remembered(10**6).count("\n") + 1 == memory.SUMMARIES_LOADED
+
+
+def test_first_reply_after_a_gap_sees_the_unsummarized_conversation(tmp_path, monkeypatch):
+    seen = spy(monkeypatch)
+    clock = Clock()
+    n = node(tmp_path, clock, background=False)
+    for text in ["my name is Dana", "I like tea"]:
+        ask(n, text)
+    clock.later(memory.EPISODE_GAP + 1)
+    ask(n, "what do you remember about me?")  # no summary exists yet
+    system = seen[-1][0]["content"]
+    assert "not summarized yet" in system
+    assert "User: my name is Dana" in system and "User: I like tea" in system
+    assert "Never invent memories" in system
+
+
+def test_tail_is_dropped_once_summarized_and_bounded():
+    from prada.store import open_store
+
+    clock = Clock()
+    mem = memory.Memory(open_store("memory", memory.MIGRATIONS, ":memory:"), clock)
+    for i in range(20):
+        mem.add(f"q{i} " + "x" * 2000, "y" * 2000)
+    assert mem.remembered() == ""  # still going
+    clock.later(memory.EPISODE_GAP + 1)
+    tail = mem.remembered()
+    assert "q19" in tail and "q0 " not in tail and len(tail) < memory.TAIL_CHARS + 200
+    run_pending(mem, lambda **kw: '{"summary": "I met Dana."}', "m")
+    out = mem.remembered()
+    assert "I met Dana." in out and "not summarized yet" not in out
+
+
+def test_no_memory_is_stated_to_the_assistant(tmp_path, monkeypatch):
+    seen = spy(monkeypatch)
+    ask(node(tmp_path, Clock(), background=False), "what do you remember about me?")
+    assert "you have no memories of earlier conversations" in seen[-1][0]["content"]

@@ -12,7 +12,10 @@ _SYSTEM = persona.system_prompt(
     "You have no internet access and no live data (weather, news, prices, time): if asked, "
     "say so instead of guessing. If you are not sure of something, say that. Do not teach or "
     "correct the user's language unless they ask. Fill the JSON object matching the provided "
-    "schema."
+    "schema. Never invent memories: you remember only what is written under 'What you "
+    "remember' below and what is in this conversation. Anything else about the user, "
+    "including what they like, did or told you before, you do not know; if asked what you "
+    "remember and there is nothing there, say plainly that you don't remember anything yet."
 )
 
 
@@ -34,9 +37,8 @@ class AssistantModule(Module):
 
     def handle(self, request: Request, ctx: Context) -> Reply:
         # The shared conversation, so she remembers what she said through any module.
-        system = _SYSTEM
-        if ctx.memory:
-            system += f"\n\nWhat you remember of earlier conversations:\n{ctx.memory}"
+        system = _SYSTEM + "\n\nWhat you remember of earlier conversations:\n"
+        system += ctx.memory or "(nothing: you have no memories of earlier conversations)"
         messages = (
             [{"role": "system", "content": system}]
             + ctx.turns
