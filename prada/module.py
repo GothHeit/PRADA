@@ -30,6 +30,13 @@ class Request(BaseModel):
     options: dict[str, str] = Field(default_factory=dict, description="Module options, e.g. lang")
 
 
+class Cut(BaseModel):
+    """She was interrupted: of her reply `text`, only `heard` was said out loud."""
+
+    text: str
+    heard: str = ""
+
+
 class Reply(BaseModel):
     module: str | None = None
     text: str = Field("", description="What PRADA says back")

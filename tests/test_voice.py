@@ -135,12 +135,14 @@ def test_speaker_keeps_streams_open(monkeypatch):
     class Stream:
         latency = 0.0
 
+        active = False
+
         def __init__(self, **kw):
             opened.append(kw)
             self.written = []
 
         def start(self):
-            pass
+            self.active = True
 
         def write(self, samples):
             self.written.append(samples)
@@ -289,11 +291,13 @@ def test_speaker_drains_before_another_rate_and_closes(monkeypatch):
     class Stream:
         latency = 0.0
 
+        active = False
+
         def __init__(self, samplerate, **kw):
             self.rate = samplerate
 
         def start(self):
-            pass
+            self.active = True
 
         def write(self, samples):
             events.append(("write", self.rate))

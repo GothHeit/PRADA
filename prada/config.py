@@ -148,6 +148,7 @@ class VoiceSettings:
     output_device: str | int | None = None
     silence: float = 0.8  # seconds of quiet that end what you're saying
     follow_up: float = 6.0  # seconds she keeps listening after a reply, no wake word (0 = off)
+    barge_in: bool = True  # a wake word while she talks stops her and she listens
 
 
 def voice_settings() -> VoiceSettings:
@@ -173,6 +174,8 @@ def voice_settings() -> VoiceSettings:
         follow_up = float(file.get("follow_up", VoiceSettings.follow_up))
         if follow_up < 0:
             raise ValueError("follow_up must not be negative")
+        if not isinstance(file.get("barge_in", True), bool):
+            raise ValueError("barge_in must be true or false")
         return VoiceSettings(
             **{
                 **file,

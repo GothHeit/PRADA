@@ -3,10 +3,21 @@
 `Ears` waits for a wake word and then hears one request; `Mouth` speaks. `run` wires them to
 a session (`prada.client`), so swapping in text fakes (`prada.voice.fake`) exercises the
 whole loop without audio hardware or models.
+
+Barge-in: while she thinks and speaks (in a thread), ears that can (`BargeEars.watch`) keep
+listening for a wake word on the main thread, the only one that ever reads the mic; hearing one sets a `Barge`, she stops mid-sentence and listens again. Only the
+wake word interrupts her, not loudness: her own voice reaches the mic, and a model trained on
+a phrase won't fire on her speech unless she says that phrase, so a line that names a wake
+word is spoken with the barge held. The node is told what was heard (`session.cut`), so her
+memory doesn't assume she said the rest.
 """
 
 import re
 import sys
+import threading
+import time
+from collections.abc import Callable
+from pathlib import Path
 from typing import Protocol
 
 from prada.client import NodeError
@@ -18,6 +29,7 @@ FRAME = 1280  # samples per frame: 80 ms, openWakeWord's step
 FRAME_SECONDS = FRAME / SAMPLE_RATE
 MIN_SPEECH_RMS = 300.0  # int16 loudness below which nothing counts as speech
 MAX_FOLLOW_UPS = 4  # replies in a row without a wake word (a TV can't chain them forever)
+VERBOSE = False  # `prada voice --verbose`: say what the ears and mouth are doing on stderr
 
 # What PRADA says when the request never got an answer.
 CANT_REACH = "Hmm, I can't reach my thoughts right now. Is my node running?"
@@ -33,11 +45,60 @@ class Ears(Protocol):
         seconds to wait for speech to begin; given, this is a follow-up straight after a reply."""
 
 
+class BargeEars(Ears, Protocol):
+    def watch(self, barge: "Barge", ready: Callable[[], None]) -> None:
+        """Call `ready()` once listening, then listen for a wake word until `barge.over` is set
+        (the turn ended); hearing one (unless `barge.held`) sets `barge`."""
+
+
 class Mouth(Protocol):
     def chime(self) -> None:
         """Signal that PRADA is listening."""
 
-    def say(self, text: str) -> None: ...
+    def say(self, text: str, barge: "Barge | None" = None) -> bool | None:
+        """Speak `text`; with `barge`, stop as soon as it is set and return False."""
+
+
+def phrase(wake_word: str) -> str:
+    """What a wake word model listens for, from its name: "wake_up_prada" -> "wake up prada"
+    ("hey_jarvis_v0.1" and paths to .onnx files too)."""
+    name = Path(wake_word).name.removesuffix(".onnx").removesuffix(".tflite")
+    return " ".join(re.sub(r"_v\d.*$", "", name).replace("_", " ").replace("-", " ").split())
+
+
+class Barge:
+    """An interruption: set by the ears when they hear a wake word while she talks."""
+
+    def __init__(self, wake_words=()):
+        self.event = threading.Event()
+        self.over = threading.Event()  # set too when the turn ends without an interruption
+        self.mouth = threading.Lock()  # held while she speaks, so a chime never overlaps her
+        self.held = False  # she is saying a wake phrase herself: don't take it as one
+        words = [phrase(w).split() for w in wake_words]
+        self._phrases = [
+            re.compile(r"\b" + r"\W+".join(map(re.escape, w)) + r"\b", re.IGNORECASE)
+            for w in words
+            if w
+        ]
+
+    def set(self) -> None:
+        debug("interrupted: she stops")
+        self.event.set()
+        self.over.set()
+
+    def is_set(self) -> bool:
+        return self.event.is_set()
+
+    def names_wake_word(self, line: str) -> bool:
+        return any(p.search(line) for p in self._phrases)
+
+
+def debug(line: str) -> None:
+    if VERBOSE:
+        print(
+            f"  ({time.strftime('%H:%M:%S')} {threading.current_thread().name}) {line}",
+            file=sys.stderr,
+        )
 
 
 def track_noise(noise: float, rms: float) -> float:
@@ -99,12 +160,27 @@ def respell(text: str, say_as: dict[str, str]) -> str:
     )
 
 
-def _speaker(mouth: Mouth, said: list[str]):
-    """Says what the node streams at once; the reply's own sentences go in `said`."""
+def _utter(mouth: Mouth, line: str, barge: Barge | None) -> bool:
+    """Say `line`; False if she was interrupted before its end (or already had been)."""
+    if barge is None:
+        mouth.say(line)
+        return True
+    if barge.is_set():
+        return False
+    with barge.mouth:
+        barge.held = barge.names_wake_word(line)
+        try:
+            return mouth.say(line, barge) is not False and not barge.is_set()
+        finally:
+            barge.held = False
+
+
+def _speaker(mouth: Mouth, said: list[str], barge: Barge | None):
+    """Says what the node streams at once; the reply's own sentences she finished go in
+    `said`. Once interrupted she says nothing more."""
 
     def speak(kind: str, line: str) -> None:
-        mouth.say(line)
-        if kind == "part":
+        if _utter(mouth, line, barge) and kind == "part":
             said.append(line)
 
     return speak
@@ -115,18 +191,64 @@ def _log(module: str | None, line: str) -> None:
     print(f"[{module or 'voice'}] prada: {line}", file=sys.stderr)
 
 
-def _say(mouth: Mouth, module: str | None, line: str) -> None:
+def _say(mouth: Mouth, module: str | None, line: str, barge: Barge | None = None) -> None:
     _log(module, line)
-    mouth.say(line)
+    _utter(mouth, line, barge)
 
 
-def run(session, ears: Ears, mouth: Mouth, once: bool = False, follow_up: float = 0.0) -> int:
+def _turn(session, text: str, mouth: Mouth, barge: Barge | None, said: list[str]):
+    """Send `text` and speak the reply as it comes; returns the Reply (None if the node
+    couldn't be reached). The reply's sentences she finished go in `said`."""
+    try:
+        reply = session.send(text, speak=_speaker(mouth, said, barge))
+    except NodeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        _say(mouth, "", CANT_REACH, barge)
+        return None
+    if reply.error:
+        print(f"error: {reply.error}", file=sys.stderr)
+        _say(mouth, reply.module, WENT_WRONG, barge)
+    else:
+        _log(reply.module, reply.text)
+        if (left := rest(reply.text, said)) and _utter(mouth, left, barge):
+            said.append(left)
+    return reply
+
+
+def _cut(session, reply, said: list[str]) -> None:
+    """Tell the node she was interrupted after the sentences in `said` (nothing to tell if
+    she had said all of it)."""
+    if reply is None or reply.error or not reply.text or not rest(reply.text, said):
+        return
+    heard = " ".join(said)
+    print(
+        f"[{reply.module or 'voice'}] (cut short{': ' + heard if heard else ''})", file=sys.stderr
+    )
+    try:
+        session.cut(reply.text, heard)
+    except NodeError as e:
+        print(f"error: {e}", file=sys.stderr)
+
+
+def run(
+    session,
+    ears: Ears,
+    mouth: Mouth,
+    once: bool = False,
+    follow_up: float = 0.0,
+    barge_in: bool = False,
+    wake_words=(),
+) -> int:
     """Wake word -> request -> node -> spoken reply, until input ends; returns an exit code.
 
     She speaks each sentence as soon as the node has it, and a filler line before a slow
     action. After a reply she keeps listening for `follow_up` seconds, so the next request
     needs no wake word (up to `MAX_FOLLOW_UPS` in a row); silence for that long sends her
-    back to waiting for one (0 turns it off)."""
+    back to waiting for one (0 turns it off).
+
+    With `barge_in` (`ears` must be `BargeEars`), a wake word while she thinks or speaks
+    stops her; the node hears how much she said, and she listens for the new request at once.
+    `wake_words` are her ears' models, so she can name one without interrupting herself."""
     while (word := ears.wait_for_wake()) is not None:
         mouth.chime()
         text = ears.listen()
@@ -134,19 +256,36 @@ def run(session, ears: Ears, mouth: Mouth, once: bool = False, follow_up: float 
         while text:
             print(f"[{word}] you: {text}", file=sys.stderr)
             said: list[str] = []
-            try:
-                reply = session.send(text, speak=_speaker(mouth, said))
-            except NodeError as e:
-                print(f"error: {e}", file=sys.stderr)
-                _say(mouth, "", CANT_REACH)
+            if not barge_in:
+                _turn(session, text, mouth, None, said)
             else:
-                if reply.error:
-                    print(f"error: {reply.error}", file=sys.stderr)
-                    _say(mouth, reply.module, WENT_WRONG)
-                else:
-                    _log(reply.module, reply.text)
-                    if left := rest(reply.text, said):
-                        mouth.say(left)
+                # The turn runs in a thread, so an interruption is answered at once, even
+                # while the node is still thinking or running an action.
+                barge = Barge(wake_words)
+                result = []
+
+                def turn(text=text, barge=barge, said=said, result=result) -> None:
+                    try:
+                        result.append(_turn(session, text, mouth, barge, said))
+                    finally:
+                        debug("she is done")
+                        barge.over.set()
+
+                worker = threading.Thread(target=turn, name="turn", daemon=True)
+                debug("turn starts")
+                ears.watch(barge, worker.start)
+                debug("watch ended")
+                if barge.is_set():
+                    with barge.mouth:  # she has stopped
+                        mouth.chime()
+                    text = "" if once else ears.listen()
+                    worker.join()  # the node must be done before the next request anyway
+                    _cut(session, result[0] if result else None, said)
+                    if once:
+                        return 0
+                    follow_ups = 0
+                    continue
+                worker.join()
             if once:
                 return 0
             follow_ups += 1

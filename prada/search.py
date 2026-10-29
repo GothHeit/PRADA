@@ -147,6 +147,14 @@ class KeywordIndex:
                 [(i, fold(c)) for i, c in rows],
             )
 
+    def replace_turn(self, turn: int, content: str) -> None:
+        """A stored turn's text changed (she was cut off). Call inside the caller's
+        transaction."""
+        if self.available:
+            self.db.execute(
+                "UPDATE memory_turn_fts SET content = ? WHERE rowid = ?", (fold(content), turn)
+            )
+
     def add_summary(self, episode: int, summary: str) -> None:
         """Index an episode's summary, and make it the topic of every turn of the episode."""
         if self.available:

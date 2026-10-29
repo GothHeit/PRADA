@@ -6,6 +6,7 @@ once by `prada voice setup`; after that nothing here touches the network.
 """
 
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -15,13 +16,16 @@ from prada.voice.loop import (
     FRAME,
     FRAME_SECONDS,
     SAMPLE_RATE,
+    Barge,
     Endpointer,
+    debug,
     respell,
     split_by_language,
     track_noise,
 )
 
 SETTLE = 0.3  # seconds of mic ignored after she speaks, before listening for a follow-up
+SLICE = 0.1  # seconds of audio written at a time, so an interruption cuts her off this fast
 MIN_NOISE = 100.0  # starting guess for the room's background loudness (int16 RMS)
 
 
@@ -155,13 +159,43 @@ class MicEars:
 
     def wait_for_wake(self) -> str | None:
         self.wake.reset()  # forget the last detection and our own voice
+        debug("waiting for a wake word")
         for frame in self._frames():
             self.noise = track_noise(self.noise, rms(frame))
             scores = self.wake.predict(frame)
             word, score = max(scores.items(), key=lambda item: item[1])
             if score >= self.threshold:
+                debug(f"heard {word} ({score:.2f})")
                 return word
         return None
+
+    def watch(self, barge: Barge, ready) -> None:
+        """Listen for a wake word while the turn runs (she thinks and speaks in a thread; this
+        is the main thread, the mic's only reader); hearing one sets `barge`. While
+        `barge.held` (she says a wake phrase herself) the model is reset on every frame
+        instead, so her words can't add up to a detection. Returns once `barge.over` is set."""
+        if not self.stream.active:
+            self.stream.start()  # before her thread starts: no two audio calls at once
+        self.wake.reset()
+        debug("watching for the wake word")
+        ready()
+        try:
+            for frame in self._frames():
+                if barge.over.is_set():
+                    break
+                if barge.held:
+                    self.wake.reset()
+                    continue
+                word, score = max(self.wake.predict(frame).items(), key=lambda item: item[1])
+                if score >= self.threshold:
+                    debug(f"heard {word} ({score:.2f}) while she talked")
+                    barge.set()
+                    break
+        except errors() as e:  # a lost mic must not take her voice with it
+            print(f"voice: stopped listening for interruptions ({e})", file=sys.stderr)
+            barge.over.wait()
+        self.wake.reset()
+        debug("stopped watching")
 
     def listen(self, wait: float | None = None) -> str:
         import numpy as np
@@ -174,6 +208,7 @@ class MicEars:
         if wait is not None:  # right after she spoke: let the room's echo of her voice die out
             for _ in range(round(SETTLE / FRAME_SECONDS)):
                 self.stream.read(FRAME)
+        debug("listening" + ("" if wait is None else f" for a follow-up ({wait:g} s)"))
         end = Endpointer(self.noise, self.silence, *([] if wait is None else [wait]))
         frames = []
         for frame in self._frames():
@@ -181,6 +216,9 @@ class MicEars:
             if end.push(rms(frame)):
                 break
         self.stream.stop()  # deaf while thinking and speaking
+        debug(
+            f"listened {end.frames * FRAME_SECONDS:.1f} s, {'speech' if end.heard else 'nothing'}"
+        )
         if not end.heard:
             return ""
         audio = np.concatenate(frames).astype(np.float32) / 32768
@@ -222,7 +260,9 @@ class Speaker:
         self.streams = {}
         self.last = None
 
-    def play(self, samples, rate: int) -> None:
+    def play(self, samples, rate: int, barge: Barge | None = None) -> bool:
+        """Queue `samples`; with `barge`, a little at a time, and once it is set what is still
+        queued is dropped and False returned."""
         import sounddevice as sd
 
         stream = self.streams.get(rate)
@@ -230,11 +270,28 @@ class Speaker:
             stream = self.streams[rate] = sd.OutputStream(
                 samplerate=rate, channels=1, dtype="int16", device=self.device
             )
+        if not stream.active:  # new, or stopped by an interruption
             stream.start()
         if self.last is not None and self.last is not stream:
             self.drain()  # another voice's rate: let the old stream finish first
-        stream.write(samples)  # returns once buffered, not once heard
         self.last = stream
+        if barge is None:
+            stream.write(samples)  # returns once buffered, not once heard
+            return True
+        step = max(1, int(rate * SLICE))
+        for at in range(0, len(samples), step):
+            if barge.is_set():
+                self.stop()
+                return False
+            stream.write(samples[at : at + step])
+        return True
+
+    def stop(self) -> None:
+        """Silence at once: drop what the device still has queued."""
+        if self.last is not None:
+            debug("speaker stopped")
+            self.last.abort()
+            self.last = None
 
     def drain(self) -> None:
         """Wait out what is still in the device's buffer, so the mic doesn't hear its tail."""
@@ -261,19 +318,21 @@ class PiperMouth:
         self.speaker = Speaker(s.output_device)
         self.say_as = s.say_as
 
-    def _play(self, samples, rate: int) -> None:
-        self.speaker.play(samples, rate)
+    def _play(self, samples, rate: int, barge: Barge | None = None) -> bool:
+        return self.speaker.play(samples, rate, barge)
 
     def chime(self) -> None:
         self._play(chime_samples(), SAMPLE_RATE)
         self.speaker.drain()
 
-    def say(self, text: str) -> None:
+    def say(self, text: str, barge: Barge | None = None) -> bool:
         for lang, part in split_by_language(respell(text, self.say_as), self.voices):
             voice = self.voices.get(lang, self.voice)
             for chunk in voice.synthesize(part):  # one sentence at a time
-                self._play(chunk.audio_int16_array, chunk.sample_rate)
+                if not self._play(chunk.audio_int16_array, chunk.sample_rate, barge):
+                    return False
         self.speaker.drain()
+        return barge is None or not barge.is_set()
 
     def close(self) -> None:
         self.speaker.close()

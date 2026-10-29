@@ -27,6 +27,9 @@ def main(argv: list[str] | None = None) -> int:
     voice = sub.add_parser("voice", help="talk to PRADA out loud: wake word, then speak")
     voice.add_argument("--port", type=int, help="home node port (default 7723)")
     voice.add_argument("--once", action="store_true", help="stop after one reply")
+    voice.add_argument(
+        "--verbose", action="store_true", help="log what the mic and speakers are doing"
+    )
     voice_sub = voice.add_subparsers(dest="voice_command")
     voice_sub.add_parser("setup", help="download the wake word, speech and voice models")
     voice_sub.add_parser("devices", help="list microphones and speakers")
@@ -178,10 +181,21 @@ def _voice(args) -> int:
     except devices.errors() as e:
         print(f"prada: {e}", file=sys.stderr)
         return 1
+    from prada.voice import loop
+
+    loop.VERBOSE = args.verbose
     words = ", ".join(settings.wake_words)
     print(f"PRADA is listening for: {words} (Ctrl+C to stop)", file=sys.stderr)
     try:
-        return run(session, ears, mouth, args.once, settings.follow_up)
+        return run(
+            session,
+            ears,
+            mouth,
+            args.once,
+            settings.follow_up,
+            settings.barge_in,
+            settings.wake_words,
+        )
     except KeyboardInterrupt:
         return 0
     except devices.errors() as e:

@@ -54,6 +54,8 @@ TAIL_CHARS = 1500  # budget for that transcript
 RECALL_HITS = 4  # most matches `recall` returns
 RECALL_CHARS = 900  # budget for them
 RECALL_LINE = 300  # each match is cut to this
+CUT_NOTE = "[you interrupted me here]"  # ends a reply she was stopped in the middle of
+CUT_SILENT = "[you interrupted me before I said anything]"
 RECALL_FETCH = 24  # candidates read from the index before the ones she already has are dropped
 
 _TASK = (
@@ -133,6 +135,23 @@ class Memory:
                 ).lastrowid
                 rows.append((turn, content))
             self.index.add_turns(rows)
+
+    def cut(self, text: str, heard: str) -> bool:
+        """She was interrupted while saying `text`: if that is the newest reply stored, keep
+        only `heard` of it, marked as cut off. False if the newest reply is another one."""
+        text = text.strip()
+        row = self.db.execute(
+            "SELECT id, content FROM memory_turn WHERE role = 'assistant' ORDER BY id DESC"
+        ).fetchone()
+        if row is None or not text or not row["content"].endswith(text):
+            return False
+        note = row["content"][: -len(text)]  # e.g. the web module's "[from a web search] "
+        heard = heard.strip()
+        content = f"{note}{heard} {CUT_NOTE}" if heard else f"{note}{CUT_SILENT}"
+        with self.db:
+            self.db.execute("UPDATE memory_turn SET content = ? WHERE id = ?", (content, row["id"]))
+            self.index.replace_turn(row["id"], content)
+        return True
 
     def _over(self) -> list[sqlite3.Row]:
         """Episodes that ended and have no summary yet."""

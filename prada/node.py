@@ -31,7 +31,7 @@ from prada.actions import Risk
 from prada.memory import EPISODE_GAP, Memory, summarize
 from prada.memory import MIGRATIONS as MEMORY_MIGRATIONS
 from prada.memory import fake_chat as memory_fake_chat
-from prada.module import Chat, Context, Module, Reply, Request
+from prada.module import Chat, Context, Cut, Module, Reply, Request
 from prada.store import open_store
 
 KEEP_ALIVE = "30m"  # how long Ollama keeps the model loaded between requests
@@ -144,6 +144,16 @@ class Node:
             finally:
                 self._speak = None
                 self._summarize_later()
+
+    def cut(self, cut: Cut) -> bool:
+        """A voice client stopped her mid-reply: memory keeps only what was heard. False if
+        `cut.text` is not the newest reply (nothing changes)."""
+        with self._lock:
+            try:
+                return self._mem().cut(cut.text, cut.heard)
+            except sqlite3.Error as e:
+                print(f"memory: could not mark the reply as cut short ({e})", file=sys.stderr)
+                return False
 
     def _hand_offer(self, name: str, reply: Reply, session: dict) -> str:
         """Gives an offer to search to the web module, which then takes the yes or no to it

@@ -2,6 +2,7 @@
 
 `connect()` returns a session whose `send(text, module=None, speak=None, **options)` gives a
 Reply; `speak(kind, text)` hears what is said before it is done (see prada.node.Node.handle).
+`cut(text, heard)` tells the node a reply was interrupted after `heard` (see Node.cut).
 Under PRADA_FAKE_LLM or PRADA_NODE=local it always runs in-process, so tests and smoke
 runs never reach a real node or model.
 """
@@ -15,7 +16,7 @@ import urllib.request
 import uuid
 
 from prada import config, llm
-from prada.module import Reply, Request
+from prada.module import Cut, Reply, Request
 from prada.server import HOST
 
 # Never send localhost traffic through a configured HTTP proxy.
@@ -36,6 +37,9 @@ class LocalSession:
     def send(self, text: str, module: str | None = None, speak=None, **options: str) -> Reply:
         request = Request(text=text, module=module, session=self.id, options=options)
         return self.node.handle(request, speak=speak)
+
+    def cut(self, text: str, heard: str) -> bool:
+        return self.node.cut(Cut(text=text, heard=heard))
 
 
 class RemoteSession:
@@ -66,6 +70,22 @@ class RemoteSession:
                 f"the PRADA node at {self.url} refused the request ({_reason(e)})"
             ) from e
         except (urllib.error.URLError, OSError, ValueError) as e:
+            raise NodeError(f"lost the PRADA node at {self.url} ({e})") from e
+
+    def cut(self, text: str, heard: str) -> bool:
+        req = urllib.request.Request(
+            f"{self.url}/v1/cut",
+            data=Cut(text=text, heard=heard).model_dump_json().encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with _opener.open(req, timeout=self.timeout) as response:
+                return bool(json.load(response)["cut"])
+        except urllib.error.HTTPError as e:
+            raise NodeError(
+                f"the PRADA node at {self.url} refused the request ({_reason(e)})"
+            ) from e
+        except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as e:
             raise NodeError(f"lost the PRADA node at {self.url} ({e})") from e
 
 

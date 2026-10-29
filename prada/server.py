@@ -4,6 +4,7 @@
     POST /v1/request  -> body: Request JSON, response: Reply JSON
     POST /v1/stream   -> body: Request JSON, response: NDJSON lines, sent as they happen:
                          {"say": text, "kind": "part"|"filler"} ... then {"reply": Reply JSON}
+    POST /v1/cut      -> body: Cut JSON (she was interrupted), response: {"cut": bool}
 
 It binds 127.0.0.1 only. POSTs must be application/json, which a web page can't send to
 another origin without a CORS preflight this server never answers, and the Host header must
@@ -18,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pydantic import ValidationError
 
 from prada import llm
-from prada.module import Request
+from prada.module import Cut, Request
 from prada.node import Node
 
 HOST = "127.0.0.1"
@@ -48,7 +49,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._host_ok():
             return
-        if self.path not in ("/v1/request", "/v1/stream"):
+        if self.path not in ("/v1/request", "/v1/stream", "/v1/cut"):
             return self._send(404, {"error": "not found"})
         if self.headers.get_content_type() != "application/json":
             return self._send(415, {"error": "expected application/json"})
@@ -59,7 +60,10 @@ class _Handler(BaseHTTPRequestHandler):
         if not 0 <= length <= MAX_BODY:
             return self._send(413, {"error": "missing or oversized Content-Length"})
         try:
-            request = Request.model_validate_json(self.rfile.read(length))
+            body = self.rfile.read(length)
+            if self.path == "/v1/cut":
+                return self._send(200, {"cut": self.node.cut(Cut.model_validate_json(body))})
+            request = Request.model_validate_json(body)
         except ValidationError as e:
             return self._send(400, {"error": f"bad request: {e.error_count()} invalid field(s)"})
         if self.path == "/v1/stream":
