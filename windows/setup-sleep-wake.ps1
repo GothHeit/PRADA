@@ -8,7 +8,7 @@ Changes only Windows settings, and prints each one:
   its own (most network cards can't wake the PC from hibernation);
 - each wired network card may wake the PC, but only for a magic packet (not for ordinary
   traffic, which would keep waking it).
-It never touches the BIOS/UEFI: see README.md, "Sleep and Wake-on-LAN", for the settings to
+It never touches the BIOS/UEFI: see docs/setup.md, "Sleep and Wake-on-LAN", for the settings to
 check there. At the end it prints the MAC address the waker needs.
 
 Run it from an elevated PowerShell. -DryRun only shows what it would change.
