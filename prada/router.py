@@ -4,6 +4,7 @@
 """
 
 import json
+import re
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -14,7 +15,7 @@ _PROMPT = """You are the router of PRADA, a personal assistant made of modules. 
 Modules:
 {modules}
 
-If no module clearly fits, pick {default}. Pick a language-practice module only for a sentence the user wrote to practise a language, never for a question or request in English.{current}
+If no module clearly fits, pick {default}. Pick a language-practice module only for a sentence the user wrote to practise a language, never for a question or request in English. A question about the user's own life or past (what they said, planned, wanted or told you before, e.g. "which camera was I thinking of buying?") goes to {default}, which remembers earlier conversations: never to a notes or web module. Pick a notes module only when the user explicitly asks to write something down or to read their notes.{current}
 """
 
 
@@ -37,6 +38,30 @@ def build_prompt(modules: list[Module], current: str | None = None) -> str:
         else ""
     )
     return _PROMPT.format(modules=listing, default=modules[0].name, current=note)
+
+
+_QUESTION = re.compile(
+    r"^\W*(?:who|whom|whose|what|which|when|where|why|how|is|are|was|were|do|does|did|have|has"
+    r"|had|can|could|will|would|should|shall|may|might|am)\b",
+    re.IGNORECASE,
+)
+_OWN_PAST = re.compile(
+    r"\b(?:(?:was|were|did)\s+i|i\s+(?:was|said|told|mentioned|wanted|thought"
+    r"|planned|asked|bought|did)|(?:do|did)\s+you\s+(?:remember|recall)"
+    r"|(?:tell|told|said\s+to)\s+you|my\s+\w+(?:'s)?\s+name)\b",
+    re.IGNORECASE,
+)
+
+
+def is_question(text: str) -> bool:
+    """True for "what's on my list?" or "do you know...": a "?" or a question word first."""
+    return text.rstrip().endswith("?") or bool(_QUESTION.match(text.replace("\u2019", "'")))
+
+
+def about_own_past(text: str) -> bool:
+    """True for a question about the user's own past ("which camera was I thinking of
+    buying?", "do you remember my sister's name?"): only her memory can answer it."""
+    return is_question(text) and bool(_OWN_PAST.search(text.replace("\u2019", "'")))
 
 
 def explicit(text: str, names) -> tuple[str, str] | None:

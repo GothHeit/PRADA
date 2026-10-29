@@ -16,7 +16,7 @@ import json
 import urllib.parse
 from typing import Literal
 
-from prada import actions, config, llm, persona
+from prada import actions, config, llm, persona, router
 from prada.actions import Action, ActionFailed, Executor
 from prada.module import Context, Module, Reply, Request
 from prada.web import answer, fetch, plan, read
@@ -210,6 +210,10 @@ class WebModule(Module):
 
     def claims(self, text: str) -> bool:
         return plan.asked_to_search(text) or actions.answer(text) is not None
+
+    def accepts(self, text: str) -> bool:
+        # The internet can't know what the user said or planned before; her memory can.
+        return plan.asked_to_search(text) or not router.about_own_past(text)
 
     def handle(self, request: Request, ctx: Context) -> Reply:
         text = request.text.strip()

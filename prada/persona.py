@@ -39,6 +39,11 @@ def noted(text: str) -> str:
     return f"Got it, I wrote that down: “{text}”."
 
 
+def not_noted() -> str:
+    """When a question reaches the notes: she never writes one down."""
+    return 'That sounds like a question, so I didn\'t write it down. Say "note that..." if you want a note.'
+
+
 def offer_search() -> str:
     """When a question would need the internet but she wasn't asked to search."""
     return "I'd have to look that up online. Want me to search for it?"

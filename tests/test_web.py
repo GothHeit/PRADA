@@ -596,7 +596,7 @@ def test_chat_smoke_offline(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "(fake web) I found 1 results" in out
     assert "searched web for: k2 reviews" in out
-    assert "search the web for “k2 reviews” and it worked" in out
+    assert "you asked me to search the web for “k2 reviews”, and I did" in out
     db = open_store("web", CACHE_MIGRATIONS)
     assert db.execute("SELECT COUNT(*) FROM web_cache").fetchone()[0] == 0  # fake: no cache
 

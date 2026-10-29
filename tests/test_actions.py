@@ -1,3 +1,4 @@
+import json
 from typing import Literal
 
 import pytest
@@ -180,3 +181,71 @@ def test_modules_share_the_conversation(monkeypatch):
         {"role": "user", "content": "what did I just ask?"},
     ]
     assert seen[1][-2] == {"role": "assistant", "content": "You asked me to note the milk."}
+
+
+def _routes_to(name):
+    return lambda messages, schema, model=None: json.dumps({"reasoning": "", "module": name})
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Which camera was I thinking of buying?",
+        "which camera was i thinking of buying",
+        "do you remember the camera?",
+        "I was thinking about a Sony A7",  # not a request to write anything down
+    ],
+)
+def test_router_cannot_turn_a_message_into_a_note(monkeypatch, text):
+    monkeypatch.setenv("PRADA_FAKE_LLM", "1")
+    monkeypatch.setattr("prada.router.fake_chat", _routes_to("notes"))
+    node = Node([AssistantModule(), NotesModule()])
+    reply = node.handle(Request(text=text, session="s"))
+    assert reply.module == "assistant" and reply.outcomes == []
+    assert node.handle(Request(text="/notes my notes", session="s")).text == (
+        "You don't have any notes yet."
+    )
+
+
+@pytest.mark.parametrize(
+    "text", ["note that the camera is a Sony A7", "can you write this down: Sony A7?"]
+)
+def test_router_still_sends_real_notes(monkeypatch, text):
+    monkeypatch.setenv("PRADA_FAKE_LLM", "1")
+    monkeypatch.setattr("prada.router.fake_chat", _routes_to("notes"))
+    reply = Node([AssistantModule(), NotesModule()]).handle(Request(text=text, session="s"))
+    assert reply.module == "notes" and reply.outcomes[0].ok
+
+
+def test_question_sent_to_notes_by_name_is_not_saved():
+    reply = Node([NotesModule()]).handle(Request(text="which camera was I thinking of buying?"))
+    assert reply.outcomes == [] and reply.text == persona.not_noted()
+
+
+def test_question_about_own_past_skips_the_web_offer(monkeypatch):
+    from prada.web.module import WebModule
+
+    monkeypatch.setenv("PRADA_FAKE_LLM", "1")
+    monkeypatch.setattr("prada.router.fake_chat", _routes_to("web"))
+    node = Node([AssistantModule(), WebModule()])
+    reply = node.handle(Request(text="what camera did I want to buy?", session="s"))
+    assert reply.module == "assistant"
+    reply = node.handle(Request(text="how tall is the Eiffel Tower?", session="t"))
+    assert reply.text == persona.offer_search()
+
+
+@pytest.mark.parametrize(
+    "text, past",
+    [
+        ("Which camera was I thinking of buying?", True),
+        ("what did I say about Porto", True),
+        ("do you remember my sister's name?", True),
+        ("Can I get a visa if I have a Brazilian passport?", False),
+        ("Is it true that I have to pay tax on crypto?", False),
+        ("Am I allowed to bring a drone to Japan?", False),
+    ],
+)
+def test_about_own_past(text, past):
+    from prada.router import about_own_past
+
+    assert about_own_past(text) is past

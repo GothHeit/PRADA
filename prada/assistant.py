@@ -36,8 +36,9 @@ def fake_chat(messages, schema, model=None) -> str:
 class AssistantModule(Module):
     name = "assistant"
     description = (
-        "General conversation: questions, facts, advice, small talk, anything that is not "
-        "language practice and not turning on the PC."
+        "General conversation: questions, facts, advice, small talk, and questions about the "
+        "user's own past or what they told you before (it searches your memory); anything that "
+        "is not language practice and not turning on the PC."
     )
     fake_chat = staticmethod(fake_chat)
 

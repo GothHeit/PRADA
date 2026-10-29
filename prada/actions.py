@@ -32,15 +32,20 @@ class Risk(StrEnum):
     IRREVERSIBLE = "irreversible"
 
 
+# English and Portuguese.
 _YES = re.compile(
     r"(?:yes|yeah|yep|yup|sure|ok|okay|please|go ahead|do it|go for it|confirm|confirmed"
-    r"|that's right|that is right|correct|affirmative)(?:[ ,]+(?:please|do it|go ahead|prada|thanks"
-    r"|thank you|yes|sure|okay|ok))*",
+    r"|that's right|that is right|correct|affirmative"
+    r"|sim|claro|pode|pode sim|pode ser|isso|isso mesmo|com certeza|beleza|manda ver|faz isso)"
+    r"(?:[ ,]+(?:please|do it|go ahead|prada|thanks|thank you|yes|sure|okay|ok"
+    r"|sim|claro|pode|por favor|obrigado|obrigada|valeu))*",
     re.IGNORECASE,
 )
 _NO = re.compile(
-    r"(?:no|nope|nah|cancel|stop|don't|do not|never ?mind|not now|wait|abort|negative)"
-    r"(?:[ ,]+(?:please|thanks|thank you|prada|don't|do not|do it|stop|cancel|that|it))*",
+    r"(?:no|nope|nah|cancel|stop|don't|do not|never ?mind|not now|wait|abort|negative"
+    r"|não|nao|cancela|para|espera|deixa|deixa pra lá|agora não|não precisa)"
+    r"(?:[ ,]+(?:please|thanks|thank you|prada|don't|do not|do it|stop|cancel|that|it"
+    r"|não|nao|obrigado|obrigada|valeu|cancela|precisa))*",
     re.IGNORECASE,
 )
 
@@ -48,7 +53,8 @@ _NO = re.compile(
 def answer(text: str) -> bool | None:
     """True / False if `text` is a plain yes / no to a question, else None. Read from what
     the person said, never from model output; anything longer or vaguer is not an answer."""
-    t = re.sub(r"[^\w' ]+", " ", text.lower()).strip()
+    t = text.lower().replace("\u2019", "'")  # don’t
+    t = re.sub(r"[^\w' ]+", " ", t).strip()
     t = re.sub(r"\s+", " ", t)
     if _YES.fullmatch(t):
         return True

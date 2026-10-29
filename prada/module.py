@@ -74,5 +74,11 @@ class Module:
         model is skipped. Only asked of the module the session is already talking to."""
         return False
 
+    def accepts(self, text: str) -> bool:
+        """False when the router model picked this module for `text` but the module can tell
+        from the words that it isn't for it; the node then sends it to the fallback module.
+        Not asked when the request names the module."""
+        return True
+
     def handle(self, request: Request, ctx: Context) -> Reply:
         raise NotImplementedError

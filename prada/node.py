@@ -11,7 +11,8 @@ conversations are written in the background and loaded into `Context.memory`.
 The node, not the model, decides whether an action may run: each executor declares a
 `Risk` (prada.actions). A risky action is held, PRADA asks about it with the real values, and
 only the person's next request can confirm it (a plain yes) or cancel it (a no, anything
-else, or `PENDING_TTL` seconds of silence). Every action's end is appended to the action log
+else, or `PENDING_TTL` seconds of silence). A reversible kind, once confirmed, stays trusted
+for the rest of that conversation (`EPISODE_GAP` of silence ends it). Every action's end is appended to the action log
 (prada.actionlog).
 """
 
@@ -27,8 +28,8 @@ from prada import actionlog, actions, llm, persona, router
 from prada.actionlog import MIGRATIONS as LOG_MIGRATIONS
 from prada.actionlog import ActionLog
 from prada.actions import Risk
+from prada.memory import EPISODE_GAP, Memory, summarize
 from prada.memory import MIGRATIONS as MEMORY_MIGRATIONS
-from prada.memory import Memory, summarize
 from prada.memory import fake_chat as memory_fake_chat
 from prada.module import Context, Module, Reply, Request
 from prada.store import open_store
@@ -78,7 +79,6 @@ class Node:
         self._retry_at = 0.0
         self._log: ActionLog | None = None
         self._pending: dict[str | None, Pending] = {}  # by session id
-        self._trusted: dict[str | None, set[str]] = {}  # kinds a session confirmed (reversible)
         self.modules = {m.name: m for m in (modules or default_modules())}
         self._db_path = db_path
         self._dbs: dict[str, sqlite3.Connection | None] = {}
@@ -94,6 +94,10 @@ class Node:
                 return Reply(module=name, error="the client went away; request dropped")
             try:
                 session = self._session(request.session)
+                now = self._clock()
+                if now - session.get("_seen", now) > EPISODE_GAP:
+                    session.pop("_trusted", None)  # a new conversation confirms again
+                session["_seen"] = now
                 memory = self._mem()
                 if (reply := self._answer(request, session, memory)) is not None:
                     name = reply.module
@@ -105,7 +109,9 @@ class Node:
                 if module is None:
                     return Reply(module=name, error=f"no module named {name!r}")
                 ctx = self._context(module, session, memory)
-                reply = self._act(module, module.handle(request, ctx), ctx, request.session)
+                reply = self._act(
+                    module, module.handle(request, ctx), ctx, request.session, session
+                )
                 session["current"] = name
                 self._remember(memory, request.text, reply)
                 return reply
@@ -135,13 +141,11 @@ class Node:
             yes = actions.answer(request.text) if fresh else None
             if yes:
                 ctx = self._context(module, session, memory)
-                self._trusted.setdefault(request.session, set()).update(
-                    a.kind for a in pending.held
-                )
+                self._trusted(session).update(a.kind for a in pending.held)
                 outcomes = [self._do(module, a, ctx, confirmed=True) for a in pending.held]
                 said = " ".join(dict.fromkeys(o.said for o in outcomes if o.said))
                 return Reply(module=module.name, text=said, outcomes=outcomes)
-            status = "declined" if yes is False else "expired"
+            status = "declined" if yes is False else "superseded" if fresh else "expired"
             for a in pending.held:
                 self._record(module, a, status=status)
             if yes is False:
@@ -153,10 +157,21 @@ class Node:
                 text = persona.timed_out() if not fresh else persona.not_a_yes()
                 return Reply(module=module.name, text=text)
         if request.module is None and (when := actionlog.asks_for_log(request.text)):
-            return Reply(module="actions", text=self._actions().day(when))
+            try:
+                text = self._actions().day(when)
+            except sqlite3.Error as e:
+                print(f"actions: could not read the action log ({e})", file=sys.stderr)
+                text = "I can't read my action log right now, so I can't tell you."
+            return Reply(module="actions", text=text)
         return None
 
-    def _act(self, module: Module, reply: Reply, ctx: Context, sid: str | None) -> Reply:
+    @staticmethod
+    def _trusted(session: dict) -> set[str]:
+        """The reversible kinds this conversation confirmed. Kept in the session, so it is
+        bounded by `MAX_SESSIONS` (a request without a session trusts nothing)."""
+        return session.setdefault("_trusted", set())
+
+    def _act(self, module: Module, reply: Reply, ctx: Context, sid, session: dict) -> Reply:
         """Run the reply's actions with the module's own executors; what PRADA says about
         each one comes from its outcome, after the result was checked. Actions whose risk
         needs the person's yes are held and asked about instead."""
@@ -166,7 +181,7 @@ class Node:
         outcomes, held = [], []
         for a in reply.actions:
             ex = allowed.get(a.kind)
-            if ex is not None and self._needs_yes(ex, a, sid):
+            if ex is not None and self._needs_yes(ex, a, session):
                 held.append(a)
             else:
                 outcomes.append(self._do(module, a, ctx, confirmed=False))
@@ -180,11 +195,11 @@ class Node:
         text = " ".join(t for t in [*lead, *dict.fromkeys(said)] if t)  # one line per kind
         return reply.model_copy(update={"text": text, "actions": [], "outcomes": outcomes})
 
-    def _needs_yes(self, executor: actions.Executor, action: actions.Action, sid) -> bool:
+    def _needs_yes(self, executor: actions.Executor, action: actions.Action, session) -> bool:
         if executor.risk is Risk.SAFE or not isinstance(action, executor.action):
             return False  # an action the executor can't run is refused, not asked about
         if executor.risk is Risk.REVERSIBLE:
-            return action.kind not in self._trusted.get(sid, ())
+            return action.kind not in self._trusted(session)
         return True
 
     def _do(self, module: Module, action: actions.Action, ctx: Context, confirmed: bool):
@@ -295,7 +310,10 @@ class Node:
             return modules[0].name, request
         if current in self.modules and self.modules[current].claims(request.text):
             return current, request  # no router call mid-conversation
-        return router.route(request.text, modules, self._chat(router.fake_chat), current), request
+        name = router.route(request.text, modules, self._chat(router.fake_chat), current)
+        if not self.modules[name].accepts(request.text):
+            name = modules[0].name  # e.g. a question the model sent to notes
+        return name, request
 
     def _chat(self, fake):
         return llm.client(fake, keep_alive=KEEP_ALIVE)

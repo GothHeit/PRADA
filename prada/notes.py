@@ -2,12 +2,16 @@
 
 Saving is a typed action: the node writes the note, reads it back to check it, and only then
 does PRADA say it is written down. No model call: the wording is matched directly.
+
+A note is only ever saved when the person asks for it in words ("note that...", "write this
+down..."): a message the router sends here without them is not taken (`accepts`), and a
+question is never saved even when sent here by name.
 """
 
 import re
 from typing import Literal
 
-from prada import persona
+from prada import persona, router
 from prada.actions import Action, ActionFailed, Executor
 from prada.module import Context, Module, Reply, Request
 
@@ -22,8 +26,11 @@ MIGRATIONS = [
 ]
 SHOWN = 10  # most recent notes read back
 
+_POLITE = r"(?:please\s+)?(?:can|could|would|will)\s+you\s+"  # "can you note that...?"
 _SAVE = re.compile(
-    r"^(?:please\s+)?(?:(?:take|make|write)\s+(?:a\s+|this\s+)?note(?:\s+(?:that|of))?"
+    r"^(?:please\s+)?(?:"
+    + _POLITE
+    + r"(?:please\s+)?)?(?:(?:take|make|write)\s+(?:a\s+|this\s+)?note(?:\s+(?:that|of))?"
     r"|note(?:\s+that)?|(?:write|jot|put)\s+(?:this|that|it)?\s*down)\s*[:,-]?\s*",
     re.IGNORECASE,
 )
@@ -65,18 +72,34 @@ def note_text(text: str) -> str:
     return _SAVE.sub("", text.strip(), count=1).strip()
 
 
+def asks_to_save(text: str) -> bool:
+    """True when the person asks in words for a note ("note that...", "can you write this
+    down?"); a question that only mentions something, like "which camera was I thinking of
+    buying?", is not."""
+    text = text.strip()
+    if not _SAVE.match(text):
+        return False
+    # "Can you note that...?" is a request; "note what I said?" reads as a question.
+    return not router.is_question(text) or bool(re.match(_POLITE, text, re.IGNORECASE))
+
+
 class NotesModule(Module):
     name = "notes"
     description = (
-        'Saves a short note the user dictates ("note that...", "write this down...") and '
-        "reads their notes back."
+        'Saves a short note only when the user explicitly asks ("note that...", "write this '
+        'down...") and reads their notes back. Never for questions.'
     )
     migrations = MIGRATIONS
     executors = [SaveNoteExecutor()]
 
+    def accepts(self, text: str) -> bool:
+        return asks_to_save(text) or bool(_LIST.match(text))
+
     def handle(self, request: Request, ctx: Context) -> Reply:
         if not request.text.strip() or _LIST.match(request.text):
             return Reply(module=self.name, text=self._read(ctx))
+        if not asks_to_save(request.text) and router.is_question(request.text):
+            return Reply(module=self.name, text=persona.not_noted())
         text = note_text(request.text)
         if not text:
             return Reply(module=self.name, text="Sure, what should I write down?")

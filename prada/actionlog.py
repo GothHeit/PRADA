@@ -2,7 +2,7 @@
 
 One row per action, written when its story ends: it ran (`done`), ran but could not be
 verified (`failed`), was refused by the node (`refused`), was asked about and the person said
-no (`declined`) or never answered (`expired`). Rows are only ever inserted, never changed.
+no (`declined`), never answered (`expired`) or said something that wasn't a yes (`superseded`). Rows are only ever inserted, never changed.
 `today` lets her answer "what did you do today?" from it, in her own words about what the
 log says and nothing else.
 """
@@ -24,7 +24,7 @@ MIGRATIONS = [
         summary TEXT NOT NULL,    -- Action.describe(): "wake your PC up"
         risk TEXT NOT NULL,       -- safe | reversible | irreversible
         confirmed INTEGER NOT NULL, -- 1 = the person said yes to this one
-        status TEXT NOT NULL,     -- done | failed | refused | declined | expired
+        status TEXT NOT NULL,     -- done | failed | refused | declined | expired | superseded
         detail TEXT NOT NULL,     -- the action's fields (JSON) and, on failure, why
         error TEXT
     );
@@ -108,7 +108,7 @@ class ActionLog:
         if not rows:
             return f"I haven't done anything {when}, as far as my log shows."
         lines = [_line(r) for r in reversed(rows)]
-        return f"Here's what my log says for {when}: " + "; ".join(lines) + "."
+        return f"Here's what my log shows for {when}: " + "; ".join(lines) + "."
 
 
 def _line(r: sqlite3.Row) -> str:
@@ -120,12 +120,16 @@ def _line(r: sqlite3.Row) -> str:
     )
     what, status = r["summary"], r["status"]
     if status == "done":
-        how = ", after you said yes" if r["confirmed"] else ""
-        return f"at {at} I was asked to {what} and it worked{how}"
+        if r["confirmed"]:
+            return f"at {at} I asked whether to {what}, you said yes, and I did"
+        return f"at {at} you asked me to {what}, and I did"
     if status == "failed":
-        return f"at {at} I tried to {what}, but it didn't work"
+        why = f" ({r['error'].rstrip('. ')})" if r["error"] else ""
+        return f"at {at} I tried to {what}, but it didn't work{why}"
     if status == "declined":
-        return f"at {at} I asked to {what} and you said no"
+        return f"at {at} I asked whether to {what}, and you said no, so I didn't"
     if status == "expired":
-        return f"at {at} I asked to {what} but you never answered"
-    return f"at {at} I wasn't allowed to {what}"
+        return f"at {at} I asked whether to {what}, but you didn't answer in time, so I didn't"
+    if status == "superseded":
+        return f"at {at} I asked whether to {what}, but you didn't say yes, so I left it"
+    return f"at {at} I meant to {what}, but I'm not allowed to, so I didn't"

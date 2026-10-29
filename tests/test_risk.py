@@ -5,6 +5,7 @@ import pytest
 from prada import persona
 from prada.actionlog import asks_for_log
 from prada.actions import Action, Executor, Risk, answer
+from prada.memory import EPISODE_GAP
 from prada.module import Module, Reply, Request
 from prada.node import PENDING_TTL, Node
 from prada.wake import WakeModule
@@ -69,12 +70,29 @@ def log_rows(node):
     ]
 
 
-@pytest.mark.parametrize("yes", ["yes", "Yes, please!", "yeah", "go ahead", "ok do it", "Sure."])
+@pytest.mark.parametrize(
+    "yes",
+    [
+        "yes",
+        "Yes, please!",
+        "yeah",
+        "go ahead",
+        "ok do it",
+        "Sure.",
+        "sim",
+        "Claro!",
+        "pode",
+        "sim, por favor",
+    ],
+)
 def test_answer_yes(yes):
     assert answer(yes) is True
 
 
-@pytest.mark.parametrize("no", ["no", "No!", "nope", "don't", "never mind", "cancel that"])
+@pytest.mark.parametrize(
+    "no",
+    ["no", "No!", "nope", "don't", "don’t", "never mind", "cancel that", "não", "nao, obrigado"],
+)
 def test_answer_no(no):
     assert answer(no) is False
 
@@ -124,6 +142,16 @@ def test_reversible_action_asks_once_per_conversation():
     assert ex.ran == ["hall", "attic"]  # another session still has to confirm
 
 
+def test_reversible_trust_ends_with_the_conversation():
+    clock = Clock()
+    module, ex = lamp(Risk.REVERSIBLE)
+    node = Node([module], clock=clock)
+    ask(node, "hall")
+    ask(node, "yes")
+    clock.t += EPISODE_GAP + 1
+    assert ask(node, "attic").text == "Should I flip the attic lamp?" and ex.ran == ["hall"]
+
+
 def test_no_cancels_and_logs_declined():
     module, ex = lamp(Risk.IRREVERSIBLE)
     node = Node([module])
@@ -133,13 +161,13 @@ def test_no_cancels_and_logs_declined():
     assert ask(node, "yes").text != "Flipped the hall lamp."  # nothing left to confirm
 
 
-@pytest.mark.parametrize("text", ["sim", "claro", "yes, but not now", "pode"])
+@pytest.mark.parametrize("text", ["hai", "oui", "yes, but not now", "da"])
 def test_short_unknown_answer_is_never_routed(text):
     module, ex = lamp(Risk.IRREVERSIBLE)
     node = Node([module])
     ask(node, "hall")
     assert ask(node, text).text == persona.not_a_yes() and ex.ran == []
-    assert log_rows(node)[0]["status"] == "expired"
+    assert log_rows(node)[0]["status"] == "superseded"
 
 
 def test_late_yes_says_it_timed_out():
@@ -158,7 +186,7 @@ def test_anything_else_drops_the_question_and_goes_on():
     reply = ask(node, "attic one over there now please")  # a new request, not an answer
     assert reply.text == "Should I flip the attic one over there now please lamp?" and ex.ran == []
     assert ask(node, "yes").text.startswith("Flipped") and len(ex.ran) == 1
-    assert [r["status"] for r in log_rows(node)] == ["expired", "done"]
+    assert [r["status"] for r in log_rows(node)] == ["superseded", "done"]
 
 
 def test_confirmation_expires():
@@ -226,7 +254,7 @@ def test_what_did_you_do_today(monkeypatch):
     ask(node, "hall")
     ask(node, "yes")
     text = ask(node, "what did you do today?").text
-    assert "toggle the hall lamp and it worked, after you said yes" in text
+    assert "I asked whether to toggle the hall lamp, you said yes, and I did" in text
     assert "haven't done anything yesterday" in ask(node, "what did you do yesterday?").text
 
 
@@ -242,3 +270,28 @@ def test_log_persists_and_is_append_only(tmp_path):
     ask(Node([module], db_path=db), "hall")
     node = Node([module], db_path=db)
     assert len(log_rows(node)) == 1
+
+
+def test_log_reads_naturally():
+    module, ex = lamp(Risk.IRREVERSIBLE)
+    node = Node([module])
+    ask(node, "hall")
+    ask(node, "no")
+    ask(node, "attic")
+    ask(node, "something else entirely, thanks")
+    text = ask(node, "what did you do today?").text
+    assert "I asked whether to toggle the hall lamp, and you said no, so I didn't" in text
+    assert "I asked whether to toggle the attic lamp, but you didn't say yes, so I left it" in text
+
+
+def test_unreadable_log_is_still_an_answer(monkeypatch):
+    import sqlite3
+
+    node = Node([lamp(Risk.SAFE)[0]])
+
+    def broken(when):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(node._actions(), "day", broken)
+    reply = ask(node, "what did you do today?")
+    assert reply.error is None and "can't read my action log" in reply.text
