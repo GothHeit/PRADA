@@ -13,7 +13,9 @@ def write_config(tmp_path, text):
     (tmp_path / "config.toml").write_text(text, encoding="utf-8")
 
 
-def test_default_brain_is_qwen25():
+def test_default_brain_is_gemma4_with_thinking_off(monkeypatch):
+    assert config.llm_settings() == config.LlmSettings("gemma4:12b", False)
+    monkeypatch.setenv("PRADA_LLM_MODEL", "qwen2.5:14b")
     assert config.llm_settings() == config.LlmSettings("qwen2.5:14b", None)
 
 

@@ -103,7 +103,7 @@ After `--setup` training is offline. With an NVIDIA GPU (PyTorch uses it from WS
 
 A conversational tutor for Japanese, French, and Russian that runs entirely on your machine — no cloud, no API keys. It checks your grammar, explains the rule in plain English, and keeps the conversation going in the language you're learning.
 
-- **Local inference** via [Ollama](https://ollama.com) + `qwen2.5:14b` by default (any Ollama model, see [Brain model](#brain-model)), at temperature 0 for determinism.
+- **Local inference** via [Ollama](https://ollama.com) + `gemma4:12b` by default (thinking off) (any Ollama model, see [Brain model](#brain-model)), at temperature 0 for determinism.
 - **Structured output** (JSON Schema) validated with **Pydantic v2** — the model fills a typed `TutorTurn` contract instead of returning free text.
 - A **two-layer design**: a silent *analysis* layer (verdict, error type, correction, English explanation) and a *surface* layer (`spoken`) — the single natural message the student actually hears. The scaffolding stays invisible so the exchange reads as a conversation.
 - **Reasoning-first**: the schema emits a chain-of-thought field *before* the verdict, so classification follows the analysis.
@@ -137,7 +137,7 @@ sources = ["web", "reddit", "github"] # the ones she may use
 Prerequisite: [Ollama](https://ollama.com) running locally.
 
 ```bash
-ollama pull qwen2.5:14b          # get the model
+ollama pull gemma4:12b          # get the model
 
 python -m venv .venv              # set up PRADA
 source .venv/bin/activate
@@ -179,7 +179,7 @@ echo "Я читаю книгу." | PRADA_FAKE_LLM=1 python -m tutor.cli
 
 ### Brain model
 
-Every module talks to one Ollama model, `qwen2.5:14b` unless the config file says otherwise:
+Every module talks to one Ollama model, `gemma4:12b` (thinking off) unless the config file says otherwise:
 
 ```toml
 [llm]
@@ -187,7 +187,7 @@ model = "qwen3.5:9b"
 think = false   # thinking models (qwen3.5) reason before answering; false skips it
 ```
 
-`PRADA_LLM_MODEL` and `PRADA_LLM_THINK` (`on`/`off`) override the file. Leave `think` out for models that don't think. `prada node` prints the model it uses.
+`PRADA_LLM_MODEL` and `PRADA_LLM_THINK` (`on`/`off`) override the file. The default model runs with `think = false`; for any other model leave `think` out unless it is a thinking model. `prada node` prints the model it uses.
 
 `PRADA_FAKE_LLM=1` swaps Ollama for canned clients (always in-process, never a running node), so tests and smoke runs never need a model.
 

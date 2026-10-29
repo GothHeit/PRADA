@@ -79,7 +79,8 @@ def node_port(port: int | None = None) -> int:
     return int(file.get("port", DEFAULT_NODE_PORT))
 
 
-DEFAULT_LLM_MODEL = "qwen2.5:14b"
+DEFAULT_LLM_MODEL = "gemma4:12b"
+DEFAULT_LLM_THINK = False  # gemma4 reasons before every answer unless told not to: ~5x slower
 
 
 @dataclass(frozen=True)
@@ -87,7 +88,9 @@ class LlmSettings:
     """The `[llm]` table: which Ollama model is PRADA's brain."""
 
     model: str = DEFAULT_LLM_MODEL
-    think: bool | None = None  # None = the model's default; false turns a thinking model's off
+    think: bool | None = (
+        DEFAULT_LLM_THINK  # None = the model's default; false turns a thinking model's off
+    )
 
 
 def _flag(text: str) -> bool:
@@ -99,7 +102,7 @@ def _flag(text: str) -> bool:
 
 
 def llm_settings() -> LlmSettings:
-    """The brain model: PRADA_LLM_MODEL / PRADA_LLM_THINK > `[llm]` > qwen2.5:14b."""
+    """The brain model: PRADA_LLM_MODEL / PRADA_LLM_THINK > `[llm]` > gemma4:12b, think off."""
     file = load_config().get("llm", {})
     if not isinstance(file, dict):
         raise ValueError(f"[llm] in {config_path()} must be a table")
@@ -112,7 +115,8 @@ def llm_settings() -> LlmSettings:
         model = file.get("model", DEFAULT_LLM_MODEL)
         if not isinstance(model, str) or not model.strip():
             raise ValueError(f"[llm] model in {config_path()} must be a model name")
-    think = file.get("think")
+    # The default think-off belongs to the default model: other models may reject the flag.
+    think = file.get("think", DEFAULT_LLM_THINK if model == DEFAULT_LLM_MODEL else None)
     if env := os.environ.get("PRADA_LLM_THINK"):
         try:
             think = _flag(env)
