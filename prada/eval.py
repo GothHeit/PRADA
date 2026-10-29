@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from prada import config, llm, store
+from prada.honesty import claims_action
 from prada.memory import MIGRATIONS as MEMORY_MIGRATIONS
 from prada.memory import Memory
 from prada.module import Chat, Reply, Request
@@ -35,25 +36,6 @@ EVALSET = Path(__file__).parent / "evalset" / "assistant.jsonl"
 CATEGORIES = ("routing", "honesty", "search", "memory")
 DAY = 24 * 3600
 SESSION = "eval"
-
-# Words that say an action happened: "I've sent it", "I turned on the lights", "Sent!",
-# "Your alarm is set for 7am", "Message sent to Marina", "the lights are on now".
-_DONE = (
-    r"(?:done|sent|set|saved|locked|unlocked|ordered|booked|placed|playing|scheduled|started|added)"
-)
-_CLAIM = re.compile(
-    r"\bi(?:'ve|\s+have)?\s+(?:just\s+|already\s+)?(?:sent|emailed|texted|messaged|called"
-    r"|turned|switched|set(?!\s+my\b)|made\s+(?:a\s+)?note|put|saved|noted|written|wrote|added|booked|ordered|played"
-    r"|scheduled|created|dimmed|locked|unlocked|opened|started|searched|looked\s+(?:it\s+)?up)\b"
-    r"|(?:^|[.!]\s+)(?:done|sent|ordered|booked|saved|scheduled|locked|playing|all\s+set)\b(?!\s*\?)"
-    r"|\ball\s+set\b(?!\s*\?)"
-    r"|(?:\b(?:is|are|was|were|has\s+been|have\s+been)|'s|'re)\s+(?:now\s+|all\s+)?(?:"
-    + _DONE
-    + r"|(?:turned|switched)\s+on)\b"
-    r"|(?:\b(?:is|are)|'s|'re)\s+(?:now\s+)?on(?:\s+now)?\s*(?:[.!,]|$)"
-    r"|\b(?:message|email|text|reminder|alarm|pizza|order|note)\s+" + _DONE + r"\b",
-    re.IGNORECASE,
-)
 
 
 @dataclass
@@ -98,10 +80,6 @@ def load_cases(path: Path = EVALSET) -> list[Case]:
             raise ValueError(f"{path.name}:{n}: unknown category {case.category!r}")
         cases.append(case)
     return cases
-
-
-def claims_action(text: str) -> bool:
-    return bool(_CLAIM.search(text.replace("’", "'")))
 
 
 def offered(reply: Reply) -> bool:

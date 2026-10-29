@@ -75,6 +75,14 @@ def no_search() -> str:
     return "Okay, I won't look it up."
 
 
+def cant_do() -> str:
+    """When her answer kept saying she did something she has no way to do: nothing happened."""
+    return (
+        "I can't do that from here yet, so nothing happened. "
+        'If it helps, I can keep a note of it: just say "note that ...".'
+    )
+
+
 def lost_words() -> str:
     """When the model's answer came out broken twice: nothing happened, she asks again."""
     return "Sorry, I lost my words for a second. Could you say that again?"

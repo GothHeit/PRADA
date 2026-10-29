@@ -5,6 +5,7 @@ import json
 from pydantic import BaseModel, Field, ValidationError
 
 from prada import persona, status
+from prada.honesty import asks_action, claims_action
 from prada.module import Context, Module, Reply, Request
 from prada.stream import FieldText, Sentences
 
@@ -20,9 +21,13 @@ _SYSTEM = persona.system_prompt(
     "the user: the current date and time, when you last talked, what your actions did or "
     "didn't do, and lines found by searching your memory. Use it when it helps (the time, "
     "that it's been a while) and never mention the block itself. "
-    "You can't save notes or reminders here: only your notes do that, never this chat. Never "
-    "say you noted, saved or wrote something down: if they asked you to, say you didn't and "
-    'that "note that ..." will. '
+    "In this chat you can only talk: you have no way to control lights, doors or devices, "
+    "send messages or emails, call anyone, play music, order or buy anything, or set alarms, "
+    "timers or reminders, and you can't save notes here either (only your notes do that). "
+    "When they ask for something like that, say plainly that you can't do it yet, never "
+    "pretend it happened or play along, and if it helps, offer what you can do instead: "
+    'a note ("note that ..." saves one) or looking something up. Never say you noted, saved '
+    "or wrote something down. "
     "Never invent memories: you remember only what is written under 'What you remember' "
     "below, what is in this conversation and lines under 'Found by searching your memory' in "
     "the status. Anything else about the user, including what they like, did or told you "
@@ -42,11 +47,36 @@ _RETRY = (
 )
 
 
+# Sent once after an answer to a request for an action that says it was done: this module
+# runs no actions, so nothing was.
+_CLAIMED = (
+    "Your last answer said something was done, but you did nothing: you have no way to do "
+    "that here. Answer the user's last message again, saying plainly that you can't do it "
+    "yet."
+)
+
+
 class Answer(BaseModel):
     reply: str = Field(..., description="The answer to say to the user")
     offer_search: bool = Field(
         False, description="True only if the reply offers to look something up online"
     )
+
+
+class _Gate:
+    """Passes finished sentences on to `say` until one says something was done; from then on
+    nothing more of that answer is spoken (`held`), so a false claim is never said aloud.
+    Without `guard` (the user didn't ask for an action) every sentence passes."""
+
+    def __init__(self, say, guard: bool = False):
+        self.say = say
+        self.guard = guard
+        self.held = False
+
+    def __call__(self, sentence: str) -> None:
+        self.held = self.held or (self.guard and claims_action(sentence))
+        if not self.held:
+            self.say(sentence)
 
 
 def fake_chat(messages, schema, model=None) -> str:
@@ -78,11 +108,26 @@ class AssistantModule(Module):
             + ctx.turns
             + [{"role": "user", "content": status.attach(request.text, lines)}]
         )
-        answer = self._answer(messages, ctx)
+        # Only a request for something to be done gets the claim guard: a claim anywhere
+        # else is chat ("I wrote you a poem"), and checking it would cut her off for nothing.
+        guard = asks_action(request.text)
+        gate = _Gate(ctx.say, guard)
+        answer = self._answer(messages, ctx, gate)
         if answer is None:
-            answer = self._answer(messages + [{"role": "system", "content": _RETRY}], ctx)
+            gate = _Gate(ctx.say, guard)
+            answer = self._answer(messages + [{"role": "system", "content": _RETRY}], ctx, gate)
         if answer is None:
             return Reply(module=self.name, text=persona.lost_words())
+        if guard and (gate.held or claims_action(answer.reply)):
+            # Asked again without speaking it: what was said aloud already is honest, and
+            # the voice says the new reply in full after it.
+            retry = messages + [
+                {"role": "assistant", "content": answer.model_dump_json()},
+                {"role": "system", "content": _CLAIMED},
+            ]
+            answer = self._answer(retry, ctx, _Gate(None))
+            if answer is None or claims_action(answer.reply):
+                return Reply(module=self.name, text=persona.cant_do())
         if not answer.offer_search:
             return Reply(module=self.name, text=answer.reply)
         # A yes to her offer searches what they asked (their words, not hers): the node
@@ -90,19 +135,19 @@ class AssistantModule(Module):
         text = answer.reply if "?" in answer.reply else f"{answer.reply} {persona.want_search()}"
         return Reply(module=self.name, text=text.strip(), offer=request.text)
 
-    def _answer(self, messages, ctx: Context) -> Answer | None:
+    def _answer(self, messages, ctx: Context, gate: "_Gate") -> Answer | None:
         """The model's answer, or None if it came out broken (e.g. just "{") or empty.
         Text already spoken from a broken answer is kept, so the reply matches what she said."""
         reply = FieldText("reply")
         args = {"messages": messages, "schema": Answer.model_json_schema()}
-        if ctx.say is not None:
-            sentences = Sentences(ctx.say)
+        if gate.say is not None:
+            sentences = Sentences(gate)
             args["on_text"] = lambda piece: sentences.feed(reply.feed(piece))
         raw = ctx.chat(**args)
         try:
             answer = Answer.model_validate_json(raw)
         except ValidationError:
-            if ctx.say is None:
+            if gate.say is None:
                 reply.feed(raw)
             # A cut-off answer still has the start of its reply; offer_search is lost with
             # the rest, so it never becomes an offer.
