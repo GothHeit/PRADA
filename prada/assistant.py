@@ -11,8 +11,9 @@ from prada.stream import FieldText, Sentences
 _SYSTEM = persona.system_prompt(
     "Answer the user's message directly and briefly, in the language they wrote it in. "
     "You can't see live data (weather, news, prices) and you never search the web on your "
-    "own: if asked for it, say so instead of guessing, and tell them you can look it up if "
-    "they ask you to search for it. If you are not sure of something, say that. Do not teach "
+    "own. When they ask for live data, or about a specific thing you aren't sure you know (a "
+    "show, game, song, person, product, release), don't guess or fill in details: say you're "
+    "not sure, ask if they want you to look it up, and set offer_search. Do not teach "
     "or correct the user's language unless they ask. Fill the JSON object matching the "
     "provided schema. "
     "The user's latest message may end with a <status> block. Your own system writes it, not "
@@ -35,10 +36,14 @@ _SYSTEM = persona.system_prompt(
 
 class Answer(BaseModel):
     reply: str = Field(..., description="The answer to say to the user")
+    offer_search: bool = Field(
+        False, description="True only if the reply offers to look something up online"
+    )
 
 
 def fake_chat(messages, schema, model=None) -> str:
-    return json.dumps({"reply": "(fake assistant) " + status.detach(messages[-1]["content"])})
+    text = status.detach(messages[-1]["content"])
+    return json.dumps({"reply": "(fake assistant) " + text, "offer_search": False})
 
 
 class AssistantModule(Module):
@@ -70,4 +75,9 @@ class AssistantModule(Module):
             reply, sentences = FieldText("reply"), Sentences(ctx.say)
             args["on_text"] = lambda piece: sentences.feed(reply.feed(piece))
         answer = Answer.model_validate_json(ctx.chat(**args))
-        return Reply(module=self.name, text=answer.reply)
+        if not answer.offer_search:
+            return Reply(module=self.name, text=answer.reply)
+        # A yes to her offer searches what they asked (their words, not hers): the node
+        # hands the message to the web module.
+        text = answer.reply if "?" in answer.reply else f"{answer.reply} {persona.want_search()}"
+        return Reply(module=self.name, text=text.strip(), offer=request.text)

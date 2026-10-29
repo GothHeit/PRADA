@@ -57,6 +57,11 @@ def offer_search() -> str:
     return "I'd have to look that up online. Want me to search for it?"
 
 
+def want_search() -> str:
+    """Added when she said she isn't sure of something but forgot to ask."""
+    return "Want me to look it up?"
+
+
 def search_what() -> str:
     return "Sure, what should I look up?"
 

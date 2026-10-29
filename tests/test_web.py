@@ -516,6 +516,68 @@ def test_offers_to_search_when_not_asked_and_waits_for_yes():
     assert web.searches == 1
 
 
+def unsure(offer=True, reply="I'm not sure who that is, honestly."):
+    """A model whose assistant answer is `reply` (offering a search if `offer`); planner
+    and web answers as in `scripted`."""
+    web_chat = scripted(seen=(seen := []))
+
+    def chat(messages, schema):
+        if schema.get("title") == "Answer":
+            return json.dumps({"reply": reply, "offer_search": offer})
+        return web_chat(messages, schema)
+
+    chat.seen = seen
+    return chat
+
+
+def test_assistant_offer_to_search_is_taken_by_a_yes():
+    web = Canned("web")
+    chat = unsure()
+    n, _ = web_node({"web": web}, chat)
+    n._route = lambda request, session: ("assistant", request)  # what the router picks
+    first = n.handle(Request(text="Do you know Monika from Doki Doki?", session="s"))
+    assert first.module == "assistant" and web.searches == 0
+    assert first.text == "I'm not sure who that is, honestly. " + persona.want_search()
+    assert "offer" not in first.model_dump()
+    del n._route  # back to the node's own routing: the yes is claimed, no router call
+    second = n.handle(Request(text="yes", session="s"))
+    assert second.module == "web" and second.text == "Here's what I found."
+    assert web.searches == 1
+    plan_messages = next(m for title, m in chat.seen if title == "WebPlan")
+    assert "Monika from Doki Doki" in json.dumps(plan_messages)
+
+
+def test_assistant_offer_declined_or_not_made():
+    web = Canned("web")
+    n, _ = web_node({"web": web}, unsure(reply="No idea, want me to look it up?"))
+    n._route = lambda request, session: ("assistant", request)
+    first = n.handle(Request(text="who sings Unravel?", session="s"))
+    assert first.text == "No idea, want me to look it up?"  # she asked: nothing added
+    del n._route
+    assert n.handle(Request(text="no", session="s")).text == persona.no_search()
+    n2, _ = web_node({"web": web}, unsure(offer=False, reply="Hi!"))
+    n2._route = lambda request, session: ("assistant", request)
+    n2.handle(Request(text="hello", session="s"))
+    assert "offer" not in n2._session("s").get("web", {})
+    assert n2._session("s")["current"] == "assistant"
+    assert web.searches == 0
+
+
+def test_an_offer_is_dropped_when_the_talk_moves_on():
+    web = Canned("web")
+    chat = unsure()
+    n, _ = web_node({"web": web}, chat)
+    n._route = lambda request, session: ("assistant", request)
+    n.handle(Request(text="who is Monika?", session="s"))
+    assert n._session("s")["web"]["offer"] == "who is Monika?"
+    n._chat = lambda fake: unsure(offer=False, reply="Sure.")  # no offer this time
+    n.handle(Request(text="never mind, tell me a joke", session="s"))
+    assert "offer" not in n._session("s")["web"]
+    n._route = lambda request, session: ("web", request)  # even if the router picks web
+    assert n.handle(Request(text="yes", session="s")).text == persona.search_what()
+    assert web.searches == 0
+
+
 def test_every_source_failing_is_a_failed_action():
     n, _ = web_node(
         {"web": Canned("web", error="my search server (SearXNG) isn't running")}, scripted()

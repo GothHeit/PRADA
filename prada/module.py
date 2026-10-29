@@ -38,6 +38,9 @@ class Reply(BaseModel):
     # What the module asks the node to do; run by the node, never sent to clients.
     actions: list[Action] = Field(default_factory=list, exclude=True)
     outcomes: list[Outcome] = Field(default_factory=list, description="Actions the node ran")
+    # A message she offered to look up online; a plain yes next searches it (the node
+    # hands it to the web module). Never sent to clients.
+    offer: str = Field("", exclude=True)
 
 
 @dataclass

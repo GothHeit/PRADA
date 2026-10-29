@@ -37,6 +37,7 @@ from prada.store import open_store
 KEEP_ALIVE = "30m"  # how long Ollama keeps the model loaded between requests
 MAX_SESSIONS = 64
 SUMMARY_RETRY = 5 * 60  # seconds before trying again after a summary failed
+OFFER_MODULE = "web"  # takes a module's offer to look something up (`Reply.offer`)
 MAX_TURNS = 20  # messages of the current conversation given to a module
 PENDING_TTL = 60  # seconds a question about a risky action stays open
 SHORT_ANSWER_WORDS = 4  # a reply this short to a held question is never routed as chat
@@ -131,7 +132,7 @@ class Node:
                 reply = self._act(
                     module, module.handle(request, ctx), ctx, request.session, session
                 )
-                session["current"] = name
+                session["current"] = self._hand_offer(name, reply, session)
                 self._remember(memory, request.text, reply)
                 return reply
             except Exception as e:
@@ -139,6 +140,18 @@ class Node:
             finally:
                 self._speak = None
                 self._summarize_later()
+
+    def _hand_offer(self, name: str, reply: Reply, session: dict) -> str:
+        """Gives an offer to search to the web module, which then takes the yes or no to it
+        (the conversation moves there); returns the module that has the conversation. Any
+        other turn drops an old offer, so a later yes never searches it."""
+        if OFFER_MODULE not in self.modules or name == OFFER_MODULE:
+            return name
+        if not reply.offer:
+            session.get(OFFER_MODULE, {}).pop("offer", None)
+            return name
+        session.setdefault(OFFER_MODULE, {})["offer"] = reply.offer
+        return OFFER_MODULE
 
     def _context(self, module: Module, session: dict, memory: Memory) -> Context:
         speak = self._speak
