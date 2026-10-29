@@ -1,6 +1,7 @@
 """Keyword search over past conversations: index, recall, exclusions, migration, CJK."""
 
 import json
+import sqlite3
 
 from prada import memory, search
 from prada.assistant import AssistantModule
@@ -261,3 +262,126 @@ def test_tail_keeps_whole_lines():
     assert lines and all(
         line.startswith(("User: ", "PRADA: ", f"{memory.persona.NAME}: ")) for line in lines
     )
+
+
+# --- topics: a turn is also found by its conversation's summary ---
+
+
+def camera_talk(mem, now):
+    talk(mem, now, "which camera should I get for the trip?", "the Fuji or the Sony")
+    talk(mem, now, "the lighter one", "that's the Fuji", gap=10)
+    talk(mem, now, "ok, let's do that", "done, it's on your list", gap=10)
+    now[0] += EPISODE_GAP + 60
+    (ep,) = [ep for ep, transcript in mem.jobs() if transcript]
+    mem.store(ep, "You chose the Fuji camera for the trip because it is lighter.", "m")
+    return ep
+
+
+def bury(mem, now):
+    """Push the summaries written so far out of what `remembered` loads."""
+    for k in range(memory.SUMMARIES_LOADED):
+        for t in "pqrs":
+            talk(mem, now, t)
+        now[0] += EPISODE_GAP + 60
+        for ep, _ in mem.jobs():
+            mem.store(ep, f"filler {k}", "m")
+
+
+def test_vague_lines_are_found_by_their_conversations_topic():
+    mem, now = make()
+    talk(mem, now, "ok, let's do that", "done")
+    assert not mem.index.search("fuji camera", 10)  # no summary yet, nothing to find it by
+    ep = camera_talk(mem, now)
+    hits = [h for h in mem.index.search("fuji camera", 50) if h.kind == "turn"]
+    vague = [h for h in hits if h.text == "ok, let's do that"]
+    assert len(vague) == 1 and vague[0].episode == ep  # the older one has no topic
+    assert vague[0].matched == 2 and vague[0].own == 0
+    assert hits[0].own > 0  # a turn's own words count before its topic
+    rows = mem.db.execute("SELECT content FROM memory_turn WHERE episode = ?", (ep,)).fetchall()
+    assert "ok, let's do that" in [r[0] for r in rows]  # the stored turn is unchanged
+
+
+def test_recall_takes_one_vague_line_per_conversation():
+    mem, now = make()
+    camera_talk(mem, now)
+    # the summary is loaded, so its vague lines aren't repeated; the turn naming the
+    # camera (own word "fuji", topic "camera") still is
+    got = mem.recall("which camera did I pick, the fuji?")
+    assert "that's the Fuji" in got and "let's do that" not in got
+    bury(mem, now)
+    got = mem.recall("what did I decide about the trip camera")
+    vague = [line for line in got.splitlines() if not any(w in line for w in ("trip", "camera"))]
+    assert "what I wrote down" in got and len(vague) == 1
+
+
+def test_fake_summaries_give_no_topic():
+    mem, now = make()
+    for t in ("ok", "sure", "fine", "yes"):
+        talk(mem, now, t, gap=10)
+    now[0] += EPISODE_GAP + 60
+    for ep, _ in mem.jobs():
+        mem.store(ep, "(fake summary) wombat", "fake")
+    assert mem.index.search("wombat", 5) == []
+
+
+def test_index_built_before_topics_is_rebuilt(tmp_path):
+    path = tmp_path / "old.db"
+    db = open_store("memory", memory.MIGRATIONS, path)
+    db.execute("CREATE VIRTUAL TABLE memory_turn_fts USING fts5(content)")
+    db.execute(
+        "INSERT INTO memory_episode (started, ended, summary, model) "
+        "VALUES (1, 2, 'We planned the Lisbon trip', 'm')"
+    )
+    db.execute(
+        "INSERT INTO memory_turn (episode, ts, role, content) VALUES (1, 1, 'user', 'sounds good')"
+    )
+    db.execute("INSERT INTO memory_turn_fts (rowid, content) VALUES (1, 'sounds good')")
+    db.commit()
+    db.close()
+    mem, _ = make(clock=lambda: 10**9, path=path)
+    hits = mem.index.search("lisbon trip", 5)
+    assert [(h.kind, h.own) for h in hits if h.kind == "turn"] == [("turn", 0)]
+    mem2, _ = make(clock=lambda: 10**9, path=path)  # reopening keeps it, adds nothing twice
+    assert len(mem2.index.search("sounds good lisbon", 5)) == 2
+
+
+def test_contractions_are_not_search_terms():
+    assert search.terms("don't forget kafka's camera, I won't") == ["forget", "kafka", "camera"]
+
+
+def test_broken_index_on_open_only_disables_search(monkeypatch):
+    def broken(self):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(search.KeywordIndex, "backfill", broken)
+    mem, now = make()
+    talk(mem, now, "hello kangaroo")
+    assert mem.recall("kangaroo") == "" and mem.recent(5)
+
+
+def test_tail_lines_not_shown_can_still_be_found():
+    mem, now = make()
+    talk(mem, now, "my locksmith is called Bartholomew", "noted", gap=10)
+    for i in range(3):
+        talk(mem, now, "x" * 600 + str(i), "y", gap=10)
+    now[0] += EPISODE_GAP + 60
+    assert "Bartholomew" not in mem.remembered()  # cut from the tail by its budget
+    assert "Bartholomew" in mem.recall("what is my locksmith called, Bartholomew?")
+
+
+def test_a_long_vague_conversation_does_not_hide_real_lines():
+    mem, now = make()
+    talk(mem, now, "My guitar teacher is called Renata. " + "She lives near the park. " * 10)
+    for t in "abc":
+        talk(mem, now, t, gap=10)
+    now[0] += EPISODE_GAP + 60
+    for ep, transcript in mem.jobs():
+        if transcript:
+            mem.store(ep, "We talked about the weather.", "m")
+    for i in range(30):
+        talk(mem, now, f"ok sounds good {i}", "sure", gap=10)
+    now[0] += EPISODE_GAP + 60
+    for ep, transcript in mem.jobs():
+        if transcript:
+            mem.store(ep, "You planned guitar practice with the teacher for the guitar exam.", "m")
+    assert "Renata" in mem.recall("who is my guitar teacher")

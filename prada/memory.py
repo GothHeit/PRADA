@@ -86,7 +86,10 @@ class Memory:
         self.clock = clock
         # An older database gets its index built here, once; with no FTS5 she just can't search.
         self.index = KeywordIndex(db)
-        self.index.backfill()
+        try:
+            self.index.backfill()
+        except sqlite3.Error:  # a locked or damaged index must not stop the conversation
+            self.index.available = False
 
     def _live(self) -> sqlite3.Row | None:
         """The conversation still going, if any."""
@@ -204,22 +207,29 @@ class Memory:
         ).fetchall()
         return row, turns[::-1]
 
+    def _tail_lines(self) -> tuple[sqlite3.Row | None, list[tuple[int, str]]]:
+        """The tail conversation and the (turn id, line) pairs of it that fit `TAIL_CHARS`,
+        oldest first: whole lines only, newest kept."""
+        row, turns = self._tail_turns()
+        lines, used = [], 0
+        for t in reversed(turns):
+            line = _line(t["role"], t["content"][:MESSAGE_CHARS])
+            if used + len(line) > TAIL_CHARS and lines:
+                break
+            lines.append((t["id"], line))
+            used += len(line) + 1
+        return row, lines[::-1]
+
     def _tail(self) -> str:
         """The end of the newest finished conversation that has no summary yet, as a
         transcript. The summary is written after the next reply, so without this she would
         know nothing of the conversation she just came back from."""
-        row, turns = self._tail_turns()
+        row, lines = self._tail_lines()
         if row is None:
             return ""
-        lines, used = [], 0
-        for line in (_line(t["role"], t["content"][:MESSAGE_CHARS]) for t in reversed(turns)):
-            if used + len(line) > TAIL_CHARS and lines:
-                break  # whole lines only, newest kept
-            lines.append(line)
-            used += len(line) + 1
         return (
             f"Your latest conversation ({_day(row['started'])}), not summarized yet; the end "
-            "of it:\n" + "\n".join(reversed(lines))
+            "of it:\n" + "\n".join(line for _, line in lines)
         )
 
     def recall(self, query: str, recent: int = 0) -> str:
@@ -227,10 +237,12 @@ class Memory:
         said): up to `RECALL_HITS` real past messages or summaries, oldest first, one line
         each, within `RECALL_CHARS`. Never the last `recent` messages of the current
         conversation, the unsummarized tail or the summaries `remembered` already gives her.
-        "" when nothing matches."""
+        A turn found only by its topic (its episode's summary) is a vague line like "ok,
+        let's do that": at most one per conversation, and none when `remembered` already
+        gives her that conversation's summary. "" when nothing matches."""
         if not self.index.available:
             return ""
-        skip_turns = {t["id"] for t in self._tail_turns()[1]}
+        skip_turns = {i for i, _ in self._tail_lines()[1]}
         if live := self._live():
             skip_turns |= {
                 r["id"]
@@ -240,6 +252,7 @@ class Memory:
                 )
             }
         skip_summaries = {i for i, _ in self._summaries(MEMORY_CHARS)}
+        covered = set(skip_summaries)  # no vague line from these episodes (or a second one)
         lines, used, seen = [], 0, set()
         need = min(2, len(terms(query)))  # one shared word is a coincidence, not a memory
         for hit in self.index.search(query, RECALL_FETCH):
@@ -249,6 +262,10 @@ class Memory:
                 continue
             if hit.text in seen:
                 continue
+            if hit.kind == "turn" and not hit.own:
+                if hit.episode in covered:
+                    continue
+                covered.add(hit.episode)
             seen.add(hit.text)
             line = _hit_line(hit)
             if lines and used + len(line) > RECALL_CHARS:
