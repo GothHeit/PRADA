@@ -9,14 +9,16 @@ import argparse
 import json
 import re
 import sys
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydantic import ValidationError
 
+from prada import config, llm
 from tutor.languages import LANGUAGES, get_language
-from tutor.orchestrator import run_turn
+from tutor.orchestrator import default_chat, run_turn
 
 EVALSET_DIR = Path(__file__).parent / "evalset"
 
@@ -38,6 +40,7 @@ class Score:
     category_ok: int = 0  # wrong sentences with the expected error_type
     correction_ok: int = 0  # wrong sentences with the expected correction (normalized)
     format_ok: int = 0  # spoken ends with reply_target verbatim
+    seconds: float = 0.0  # total model time, to compare models' speed
     by_category: dict[str, list[int]] = field(default_factory=lambda: defaultdict(lambda: [0, 0]))
 
 
@@ -66,14 +69,17 @@ def score_language(lang: str, chat=None) -> Score:
     score = Score()
     for case in load_cases(lang):
         score.cases += 1
+        start = time.perf_counter()
         try:
             turn = run_turn(case.text, lang, chat=chat)
         except (ValidationError, ValueError):
+            score.seconds += time.perf_counter() - start
             score.failed += 1
             if not case.is_correct:
                 score.wrong_cases += 1
                 score.by_category[case.error_type][1] += 1
             continue
+        score.seconds += time.perf_counter() - start
         score.verdict_ok += turn.is_correct == case.is_correct
         score.format_ok += turn.spoken.rstrip().endswith(turn.reply_target.strip())
         if not case.is_correct:
@@ -97,6 +103,7 @@ def format_report(lang: str, s: Score) -> str:
         f"  error category:             {_pct(s.category_ok, s.wrong_cases)}",
         f"  exact correction:           {_pct(s.correction_ok, s.wrong_cases)}",
         f"  spoken ends with question:  {_pct(s.format_ok, s.cases)}",
+        f"  seconds per sentence:       {s.seconds / max(s.cases, 1):.1f}",
     ]
     for cat in sorted(s.by_category):
         ok, total = s.by_category[cat]
@@ -111,12 +118,35 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         action="append",
         help="language to score (repeatable; default: all)",
     )
+    parser.add_argument(
+        "--model", help="Ollama model to score instead of the configured one (e.g. qwen3.5:9b)"
+    )
+    parser.add_argument(
+        "--think",
+        choices=["on", "off"],
+        help="turn a thinking model's reasoning on or off (default: [llm] think)",
+    )
 
 
-def run(langs: list[str] | None) -> int:
+def run(langs: list[str] | None, model: str | None = None, think: str | None = None) -> int:
+    think = None if think is None else think == "on"
+    try:
+        chat = default_chat(model, think)
+        settings = config.llm_settings()
+    except ValueError as e:
+        print(f"eval: {e}", file=sys.stderr)
+        return 1
+    if llm.fake_enabled():
+        print("model: fake")
+    else:
+        think = settings.think if think is None else think
+        print(
+            f"model: {model or settings.model}"
+            + ("" if think is None else f", think {'on' if think else 'off'}")
+        )
     for lang in langs or sorted(LANGUAGES):
         try:
-            score = score_language(lang)
+            score = score_language(lang, chat=chat)
         except Exception as e:  # e.g. Ollama not running: one line, not a traceback
             print(f"eval: [{lang}] stopped: {e}", file=sys.stderr)
             return 1
@@ -127,7 +157,8 @@ def run(langs: list[str] | None) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m tutor.eval", description="Score the tutor")
     add_arguments(parser)
-    return run(parser.parse_args(argv).lang)
+    args = parser.parse_args(argv)
+    return run(args.lang, args.model, args.think)
 
 
 if __name__ == "__main__":

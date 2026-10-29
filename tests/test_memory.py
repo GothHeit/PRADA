@@ -98,3 +98,11 @@ def test_stats_accepts_lang_either_side(monkeypatch, tmp_path, capsys, argv):
     assert main(argv) == 0
     out = capsys.readouterr().out
     assert "article: 1" in out and "case" not in out
+
+
+def test_exchange_logs_the_brain_model(monkeypatch):
+    db = memory.open_memory(":memory:")
+    monkeypatch.delenv("PRADA_FAKE_LLM", raising=False)
+    monkeypatch.setenv("PRADA_LLM_MODEL", "qwen3.5:9b")
+    memory.log_exchange(db, "ru", "a", make_turn())
+    assert db.execute("SELECT model FROM tutor_exchange").fetchone()[0] == "qwen3.5:9b"

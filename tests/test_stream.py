@@ -91,7 +91,7 @@ def streaming_model(monkeypatch, text=LONG):
     monkeypatch.delenv("PRADA_FAKE_LLM", raising=False)
     calls = []
 
-    def chat(messages, schema, model=llm.MODEL, keep_alive=None, on_text=None):
+    def chat(messages, schema, on_text=None, **options):
         out = json.dumps({"reply": text})
         calls.append(on_text is not None)
         if on_text is not None:

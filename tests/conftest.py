@@ -7,3 +7,5 @@ def isolate(monkeypatch, tmp_path):
     monkeypatch.setenv("PRADA_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("PRADA_CONFIG", str(tmp_path / "config.toml"))
     monkeypatch.setenv("PRADA_NODE", "local")
+    monkeypatch.delenv("PRADA_LLM_MODEL", raising=False)
+    monkeypatch.delenv("PRADA_LLM_THINK", raising=False)

@@ -103,7 +103,7 @@ After `--setup` training is offline. With an NVIDIA GPU (PyTorch uses it from WS
 
 A conversational tutor for Japanese, French, and Russian that runs entirely on your machine — no cloud, no API keys. It checks your grammar, explains the rule in plain English, and keeps the conversation going in the language you're learning.
 
-- **Local inference** via [Ollama](https://ollama.com) + `qwen2.5:14b`, at temperature 0 for determinism.
+- **Local inference** via [Ollama](https://ollama.com) + `qwen2.5:14b` by default (any Ollama model, see [Brain model](#brain-model)), at temperature 0 for determinism.
 - **Structured output** (JSON Schema) validated with **Pydantic v2** — the model fills a typed `TutorTurn` contract instead of returning free text.
 - A **two-layer design**: a silent *analysis* layer (verdict, error type, correction, English explanation) and a *surface* layer (`spoken`) — the single natural message the student actually hears. The scaffolding stays invisible so the exchange reads as a conversation.
 - **Reasoning-first**: the schema emits a chain-of-thought field *before* the verdict, so classification follows the analysis.
@@ -177,11 +177,23 @@ ruff check . && ruff format --check . && python -m pytest
 echo "Я читаю книгу." | PRADA_FAKE_LLM=1 python -m tutor.cli
 ```
 
+### Brain model
+
+Every module talks to one Ollama model, `qwen2.5:14b` unless the config file says otherwise:
+
+```toml
+[llm]
+model = "qwen3.5:9b"
+think = false   # thinking models (qwen3.5) reason before answering; false skips it
+```
+
+`PRADA_LLM_MODEL` and `PRADA_LLM_THINK` (`on`/`off`) override the file. Leave `think` out for models that don't think. `prada node` prints the model it uses.
+
 `PRADA_FAKE_LLM=1` swaps Ollama for canned clients (always in-process, never a running node), so tests and smoke runs never need a model.
 
 ## Eval
 
-`prada eval [--lang ru]` runs the tutor over the labeled sentences in `tutor/evalset/` and prints verdict, error-category and correction accuracy per language. Run it against the real model before and after a prompt or model change; with `PRADA_FAKE_LLM=1` it only checks the plumbing.
+`prada eval [--lang ru] [--model qwen3.5:9b] [--think off]` runs the tutor over the labeled sentences in `tutor/evalset/` and prints verdict, error-category and correction accuracy and seconds per sentence for each language. Run it against the real model before and after a prompt or model change; `--model` and `--think` try another model without touching the config, so two brains can be compared side by side. With `PRADA_FAKE_LLM=1` it only checks the plumbing.
 
 ## Roadmap
 

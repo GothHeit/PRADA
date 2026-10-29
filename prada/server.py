@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from pydantic import ValidationError
 
+from prada import llm
 from prada.module import Request
 from prada.node import Node
 
@@ -120,8 +121,10 @@ def make_server(node: Node, port: int) -> ThreadingHTTPServer:
 
 def serve(port: int, node: Node | None = None) -> None:
     node = node or Node()
+    brain = "fake" if llm.fake_enabled() else llm.model_name()  # a bad [llm] table fails here
     with make_server(node, port) as server:
-        print(f"PRADA node on http://{HOST}:{server.server_port} ({', '.join(node.modules)})")
+        modules = ", ".join(node.modules)
+        print(f"PRADA node on http://{HOST}:{server.server_port} ({modules}; brain {brain})")
         try:
             server.serve_forever()
         except KeyboardInterrupt:

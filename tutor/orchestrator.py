@@ -4,11 +4,12 @@ from tutor.prompts import build_system_prompt
 from tutor.schema import TutorTurn, turn_schema
 
 
-def default_chat():
-    """The model client: the tutor's fake one when PRADA_FAKE_LLM is set, Ollama otherwise."""
+def default_chat(model: str | None = None, think: bool | None = None):
+    """The model client: the tutor's fake one when PRADA_FAKE_LLM is set, Ollama otherwise
+    (`model` and `think` override the configured ones)."""
     from tutor import fake_client
 
-    return llm.client(fake_client.chat)
+    return llm.client(fake_client.chat, model=model, think=think)
 
 
 def run_turn(

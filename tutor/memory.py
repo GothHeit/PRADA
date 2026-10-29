@@ -1,7 +1,6 @@
 """The tutor's tables in PRADA's shared memory: a log of every exchange."""
 
-import os
-
+from prada import llm
 from prada.store import open_store
 from tutor.schema import TutorTurn
 
@@ -29,7 +28,7 @@ def open_memory(path=None):
 
 
 def log_exchange(db, language: str, user_text: str, turn: TutorTurn) -> None:
-    model = "fake" if os.environ.get("PRADA_FAKE_LLM") else "ollama"
+    model = "fake" if llm.fake_enabled() else llm.model_name()
     with db:
         db.execute(
             "INSERT INTO tutor_exchange "

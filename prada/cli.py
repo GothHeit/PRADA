@@ -90,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "eval":
         from tutor.eval import run as run_eval
 
-        return run_eval(args.lang)
+        return run_eval(args.lang, args.model, args.think)
     elif args.tutor_command == "stats":
         from tutor.cli import show_stats
 

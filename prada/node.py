@@ -333,7 +333,7 @@ class Node:
             if not jobs:
                 return
             self._summarizing = True
-            model = "fake" if llm.fake_enabled() else llm.MODEL
+            model = "fake" if llm.fake_enabled() else llm.model_name()
             chat = self._chat(memory_fake_chat)
         try:
             for episode, transcript in jobs:

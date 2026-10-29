@@ -10,6 +10,10 @@ The config file is TOML at $PRADA_CONFIG, or ~/.config/prada/config.toml:
     [node]
     port = 7723
 
+    [llm]
+    model = "qwen3.5:9b"
+    think = false
+
     [voice]
     wake_words = ["hey_jarvis", "~/prada/wake_up_prada.onnx"]
 
@@ -73,6 +77,50 @@ def node_port(port: int | None = None) -> int:
     if not isinstance(file, dict):
         raise ValueError(f"[node] in {config_path()} must be a table")
     return int(file.get("port", DEFAULT_NODE_PORT))
+
+
+DEFAULT_LLM_MODEL = "qwen2.5:14b"
+
+
+@dataclass(frozen=True)
+class LlmSettings:
+    """The `[llm]` table: which Ollama model is PRADA's brain."""
+
+    model: str = DEFAULT_LLM_MODEL
+    think: bool | None = None  # None = the model's default; false turns a thinking model's off
+
+
+def _flag(text: str) -> bool:
+    if (word := text.strip().lower()) in ("1", "true", "yes", "on"):
+        return True
+    if word in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"expected true or false, got {text!r}")
+
+
+def llm_settings() -> LlmSettings:
+    """The brain model: PRADA_LLM_MODEL / PRADA_LLM_THINK > `[llm]` > qwen2.5:14b."""
+    file = load_config().get("llm", {})
+    if not isinstance(file, dict):
+        raise ValueError(f"[llm] in {config_path()} must be a table")
+    if unknown := sorted(set(file) - set(LlmSettings.__dataclass_fields__)):
+        raise ValueError(f"unknown [llm] setting(s) in {config_path()}: {', '.join(unknown)}")
+    if model := os.environ.get("PRADA_LLM_MODEL"):
+        if not model.strip():
+            raise ValueError("PRADA_LLM_MODEL must be a model name")
+    else:
+        model = file.get("model", DEFAULT_LLM_MODEL)
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError(f"[llm] model in {config_path()} must be a model name")
+    think = file.get("think")
+    if env := os.environ.get("PRADA_LLM_THINK"):
+        try:
+            think = _flag(env)
+        except ValueError as e:
+            raise ValueError(f"PRADA_LLM_THINK: {e}") from None
+    elif think is not None and not isinstance(think, bool):
+        raise ValueError(f"[llm] think in {config_path()} must be true or false")
+    return LlmSettings(model=model.strip(), think=think)
 
 
 @dataclass(frozen=True)
