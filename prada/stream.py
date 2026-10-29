@@ -23,6 +23,7 @@ class FieldText:
         self._raw = ""
         self._begin: int | None = None
         self._sent = 0
+        self.text = ""  # all of the field decoded so far
 
     def feed(self, chunk: str) -> str:
         """Add raw model output; returns the newly decoded text of the field ("" if none)."""
@@ -53,7 +54,7 @@ class FieldText:
             text = json.loads(f'"{body[:i]}"')
         except ValueError:
             return ""
-        new, self._sent = text[self._sent :], len(text)
+        new, self._sent, self.text = text[self._sent :], len(text), text
         return new
 
 

@@ -73,3 +73,8 @@ def looking_up() -> str:
 
 def no_search() -> str:
     return "Okay, I won't look it up."
+
+
+def lost_words() -> str:
+    """When the model's answer came out broken twice: nothing happened, she asks again."""
+    return "Sorry, I lost my words for a second. Could you say that again?"

@@ -2,7 +2,7 @@
 
 import json
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from prada import persona, status
 from prada.module import Context, Module, Reply, Request
@@ -31,6 +31,14 @@ _SYSTEM = persona.system_prompt(
     "are real lines from earlier conversations that match what the user just said; use them "
     "only if they help, say that you remember them from before, and never add details they "
     "don't contain. If they don't answer the question, you don't remember it."
+)
+
+
+# Sent once after a broken answer. The model runs at temperature 0, so asking again with
+# the same messages would give the same broken answer: the extra line changes the prompt.
+_RETRY = (
+    "Your last answer came out empty. Answer the user's last message again, with your reply "
+    "in the reply field of the JSON object."
 )
 
 
@@ -70,14 +78,34 @@ class AssistantModule(Module):
             + ctx.turns
             + [{"role": "user", "content": status.attach(request.text, lines)}]
         )
-        args = {"messages": messages, "schema": Answer.model_json_schema()}
-        if ctx.say is not None:
-            reply, sentences = FieldText("reply"), Sentences(ctx.say)
-            args["on_text"] = lambda piece: sentences.feed(reply.feed(piece))
-        answer = Answer.model_validate_json(ctx.chat(**args))
+        answer = self._answer(messages, ctx)
+        if answer is None:
+            answer = self._answer(messages + [{"role": "system", "content": _RETRY}], ctx)
+        if answer is None:
+            return Reply(module=self.name, text=persona.lost_words())
         if not answer.offer_search:
             return Reply(module=self.name, text=answer.reply)
         # A yes to her offer searches what they asked (their words, not hers): the node
         # hands the message to the web module.
         text = answer.reply if "?" in answer.reply else f"{answer.reply} {persona.want_search()}"
         return Reply(module=self.name, text=text.strip(), offer=request.text)
+
+    def _answer(self, messages, ctx: Context) -> Answer | None:
+        """The model's answer, or None if it came out broken (e.g. just "{") or empty.
+        Text already spoken from a broken answer is kept, so the reply matches what she said."""
+        reply = FieldText("reply")
+        args = {"messages": messages, "schema": Answer.model_json_schema()}
+        if ctx.say is not None:
+            sentences = Sentences(ctx.say)
+            args["on_text"] = lambda piece: sentences.feed(reply.feed(piece))
+        raw = ctx.chat(**args)
+        try:
+            answer = Answer.model_validate_json(raw)
+        except ValidationError:
+            if ctx.say is None:
+                reply.feed(raw)
+            # A cut-off answer still has the start of its reply; offer_search is lost with
+            # the rest, so it never becomes an offer.
+            answer = Answer(reply=reply.text)
+        answer.reply = answer.reply.strip()
+        return answer if answer.reply else None
