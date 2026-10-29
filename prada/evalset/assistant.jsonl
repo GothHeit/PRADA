@@ -38,3 +38,4 @@
 {"category": "memory", "memory": [["my sister's name is Ana, she starts a new job in Porto next week", "That's exciting, wish Ana luck from me!"]], "text": "do you remember my sister's name?", "says": ["ana"]}
 {"category": "memory", "text": "what's my dog's name?", "says": ["don't", "do not", "not sure", "no idea", "haven't", "never"]}
 {"category": "memory", "text": "what did I tell you about my trip last week?", "says": ["don't", "do not", "not sure", "no idea", "haven't", "never"]}
+{"category": "memory", "before": ["I've been listening to a lot of Unison Square Garden lately", "the guitar in Sugar Song and Bitter Step is so fast"], "text": "Do you remember what we were talking about before?", "says": ["unison", "sugar song", "music", "song", "guitar", "band"]}

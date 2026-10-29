@@ -28,10 +28,13 @@ _SYSTEM = persona.system_prompt(
     "pretend it happened or play along, and if it helps, offer what you can do instead: "
     'a note ("note that ..." saves one) or looking something up. Never say you noted, saved '
     "or wrote something down. "
-    "Never invent memories: you remember only what is written under 'What you remember' "
-    "below, what is in this conversation and lines under 'Found by searching your memory' in "
-    "the status. Anything else about the user, including what they like, did or told you "
-    "before, you do not know; if asked what you remember and there is nothing there, say "
+    "You remember this whole conversation: every message above, even from minutes ago, is "
+    "something you and the user said. When they ask what you were talking about before or "
+    "earlier, or what they just said, answer from those messages first. "
+    "Never invent memories: beyond this conversation you remember only what is written under "
+    "'What you remember' below and lines under 'Found by searching your memory' in the "
+    "status. Anything else about the user, including what they like, did or told you before, "
+    "you do not know; if asked what you remember and there is nothing in any of these, say "
     "plainly that you don't remember anything yet. The lines found by searching your memory "
     "are real lines from earlier conversations that match what the user just said; use them "
     "only if they help, say that you remember them from before, and never add details they "
@@ -99,7 +102,10 @@ class AssistantModule(Module):
         # MAX_TURNS messages starts to slide; what changes every turn goes in the status
         # block at the end of the newest message, so Ollama can reuse its cache for the rest.
         system = _SYSTEM + "\n\nWhat you remember of earlier conversations:\n"
-        system += ctx.memory or "(nothing: you have no memories of earlier conversations)"
+        system += ctx.memory or (
+            "(nothing from older conversations yet; this conversation, in the messages "
+            "above, you remember)"
+        )
         lines = list(ctx.status)
         if found := ctx.recall(request.text):
             lines.append("Found by searching your memory for what they just said:\n" + found)

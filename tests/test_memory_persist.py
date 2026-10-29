@@ -374,4 +374,6 @@ def test_tail_is_dropped_once_summarized_and_bounded():
 def test_no_memory_is_stated_to_the_assistant(tmp_path, monkeypatch):
     seen = spy(monkeypatch)
     ask(node(tmp_path, Clock(), background=False), "what do you remember about me?")
-    assert "you have no memories of earlier conversations" in seen[-1][0]["content"]
+    system = seen[-1][0]["content"]
+    assert "nothing from older conversations yet" in system
+    assert "You remember this whole conversation" in system
