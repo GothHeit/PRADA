@@ -46,10 +46,18 @@ def main(argv: list[str] | None = None) -> int:
     stats = tutor_sub.add_parser("stats", help="show your logged practice, errors by category")
     stats.add_argument("--lang", dest="stats_lang", choices=sorted(LANGUAGES), help="one language")
 
-    evaluate = sub.add_parser("eval", help="score the tutor on the labeled eval set")
+    evaluate = sub.add_parser("eval", help="score a model as tutor or assistant on fixed cases")
     from tutor.eval import add_arguments as add_eval_arguments
 
     add_eval_arguments(evaluate)
+    evaluate.add_argument(
+        "--suite",
+        choices=["tutor", "assistant"],
+        default="tutor",
+        help="tutor: labeled learner sentences (--lang); assistant: routing, honesty, "
+        "search offers and memory, plus a transcript of every exchange",
+    )
+    evaluate.add_argument("--transcript", help="assistant suite: where to write the transcript")
 
     args = parser.parse_args(argv)
     if args.command == "wake":
@@ -87,6 +95,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"PRADA node up at {url} (modules: {', '.join(modules)})")
     elif args.command == "voice":
         return _voice(args)
+    elif args.command == "eval" and args.suite == "assistant":
+        from prada.eval import run as run_assistant_eval
+
+        return run_assistant_eval(args.model, args.think, args.transcript)
     elif args.command == "eval":
         from tutor.eval import run as run_eval
 

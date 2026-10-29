@@ -31,7 +31,7 @@ from prada.actions import Risk
 from prada.memory import EPISODE_GAP, Memory, summarize
 from prada.memory import MIGRATIONS as MEMORY_MIGRATIONS
 from prada.memory import fake_chat as memory_fake_chat
-from prada.module import Context, Module, Reply, Request
+from prada.module import Chat, Context, Module, Reply, Request
 from prada.store import open_store
 
 KEEP_ALIVE = "30m"  # how long Ollama keeps the model loaded between requests
@@ -78,9 +78,13 @@ class Node:
         db_path=None,
         clock=time.time,
         background: bool = True,
+        client: Callable[[Chat], Chat] | None = None,
     ):
         """`background`: write episode summaries in a thread after a reply (tests turn it off
-        and call `summarize_pending`)."""
+        and call `summarize_pending`). `client(fake)` gives the chat function for a module
+        whose offline canned chat is `fake` (default: the configured model; `prada eval`
+        passes the model it scores)."""
+        self._client = client or (lambda fake: llm.client(fake, keep_alive=KEEP_ALIVE))
         self._clock = clock
         self._background = background
         self._memory: Memory | None = None
@@ -378,7 +382,7 @@ class Node:
         return name, request
 
     def _chat(self, fake):
-        return llm.client(fake, keep_alive=KEEP_ALIVE)
+        return self._client(fake)
 
     def _session(self, sid: str | None) -> dict:
         if sid is None:

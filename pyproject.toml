@@ -49,6 +49,7 @@ prada = "prada.cli:main"
 packages = ["prada", "prada.voice", "prada.web", "prada.web.sources", "tutor"]
 
 [tool.setuptools.package-data]
+prada = ["evalset/*.jsonl"]
 tutor = ["evalset/*.jsonl"]
 
 [tool.ruff]

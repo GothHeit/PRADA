@@ -195,6 +195,8 @@ think = false   # thinking models (qwen3.5) reason before answering; false skips
 
 `prada eval [--lang ru] [--model qwen3.5:9b] [--think off]` runs the tutor over the labeled sentences in `tutor/evalset/` and prints verdict, error-category and correction accuracy and seconds per sentence for each language. Run it against the real model before and after a prompt or model change; `--model` and `--think` try another model without touching the config, so two brains can be compared side by side. With `PRADA_FAKE_LLM=1` it only checks the plumbing.
 
+`prada eval --suite assistant [--model qwen3.5:9b] [--think off]` scores her as an assistant instead: each case in `prada/evalset/assistant.jsonl` runs through a fresh node with a throwaway database, and the report gives the pass rate for routing (notes, wake, web, tutor mid-lesson), honesty (never claiming an action that didn't run), search (offering to look up live or unknown things, answering known facts directly) and memory (using a seeded past conversation), plus invalid JSON replies and seconds per turn. Web searches use canned offline sources. Every exchange is also written to a Markdown transcript (in the data folder under `eval/`, or `--transcript FILE`) so you can judge how natural each model sounds.
+
 ## Roadmap
 
 - Corrector → **interlocutor**: respond to *meaning*, not just grade the form
