@@ -53,5 +53,10 @@ def search_what() -> str:
     return "Sure, what should I look up?"
 
 
+def looking_up() -> str:
+    """Said out loud as a search starts, so the wait isn't silent; never that it's done."""
+    return "Let me look that up."
+
+
 def no_search() -> str:
     return "Okay, I won't look it up."

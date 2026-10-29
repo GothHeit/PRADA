@@ -10,12 +10,14 @@ import sys
 from typing import Protocol
 
 from prada.client import NodeError
+from prada.stream import rest
 from tutor.languages import detect_language
 
 SAMPLE_RATE = 16000  # what openWakeWord and whisper.cpp expect
 FRAME = 1280  # samples per frame: 80 ms, openWakeWord's step
 FRAME_SECONDS = FRAME / SAMPLE_RATE
 MIN_SPEECH_RMS = 300.0  # int16 loudness below which nothing counts as speech
+MAX_FOLLOW_UPS = 4  # replies in a row without a wake word (a TV can't chain them forever)
 
 # What PRADA says when the request never got an answer.
 CANT_REACH = "Hmm, I can't reach my thoughts right now. Is my node running?"
@@ -86,26 +88,45 @@ def split_by_language(text: str, languages) -> list[tuple[str | None, str]]:
     return runs
 
 
+def _speaker(mouth: Mouth, said: list[str]):
+    """Says what the node streams at once; the reply's own sentences go in `said`."""
+
+    def speak(kind: str, line: str) -> None:
+        mouth.say(line)
+        if kind == "part":
+            said.append(line)
+
+    return speak
+
+
 def run(session, ears: Ears, mouth: Mouth, once: bool = False, follow_up: float = 0.0) -> int:
     """Wake word -> request -> node -> spoken reply, until input ends; returns an exit code.
 
-    After a reply she keeps listening for `follow_up` seconds, so the next request needs no
-    wake word; silence for that long sends her back to waiting for one (0 turns it off)."""
+    She speaks each sentence as soon as the node has it, and a filler line before a slow
+    action. After a reply she keeps listening for `follow_up` seconds, so the next request
+    needs no wake word (up to `MAX_FOLLOW_UPS` in a row); silence for that long sends her
+    back to waiting for one (0 turns it off)."""
     while (word := ears.wait_for_wake()) is not None:
         mouth.chime()
         text = ears.listen()
+        follow_ups = 0
         while text:
             print(f"[{word}] you: {text}", file=sys.stderr)
+            said: list[str] = []
             try:
-                reply = session.send(text)
+                reply = session.send(text, speak=_speaker(mouth, said))
             except NodeError as e:
                 print(f"prada: {e}", file=sys.stderr)
                 mouth.say(CANT_REACH)
             else:
                 if reply.error:
                     print(f"prada: {reply.error}", file=sys.stderr)
-                mouth.say(WENT_WRONG if reply.error else reply.text)
+                    mouth.say(WENT_WRONG)
+                elif left := rest(reply.text, said):
+                    mouth.say(left)
             if once:
                 return 0
-            text = ears.listen(follow_up) if follow_up > 0 else ""
+            follow_ups += 1
+            more = follow_up > 0 and follow_ups <= MAX_FOLLOW_UPS
+            text = ears.listen(follow_up) if more else ""
     return 0

@@ -1,6 +1,8 @@
 """PRADA's shared model client: Ollama on the node, or a module's canned fake offline.
 
 Every chat function takes (messages, schema) and returns the model's JSON reply as a string.
+The ones `client` returns also take `on_text`, called with each piece of the reply as the
+model writes it (a fake gives the whole reply as one piece).
 """
 
 import os
@@ -15,17 +17,24 @@ NUM_CTX = 8192
 _fake_notice_shown = False
 
 
-def chat(messages, schema, model=MODEL, keep_alive=None) -> str:
+def chat(messages, schema, model=MODEL, keep_alive=None, on_text=None) -> str:
     import ollama
 
-    response = ollama.chat(
+    args = dict(
         model=model,
         messages=messages,
         format=schema,
         options={"temperature": 0, "num_ctx": NUM_CTX},
         keep_alive=keep_alive,
     )
-    return response["message"]["content"]
+    if on_text is None:
+        return ollama.chat(**args)["message"]["content"]
+    pieces = []
+    for chunk in ollama.chat(**args, stream=True):
+        if piece := chunk["message"]["content"]:
+            pieces.append(piece)
+            on_text(piece)
+    return "".join(pieces)
 
 
 def fake_enabled() -> bool:
@@ -39,7 +48,14 @@ def client(fake, keep_alive=None):
         if not _fake_notice_shown:
             print("PRADA_FAKE_LLM is set: using the canned offline client", file=sys.stderr)
             _fake_notice_shown = True
-        return fake
-    if keep_alive is None:
-        return chat
-    return lambda messages, schema: chat(messages, schema, keep_alive=keep_alive)
+
+        def canned(messages, schema, on_text=None):
+            text = fake(messages=messages, schema=schema)
+            if on_text is not None:
+                on_text(text)
+            return text
+
+        return canned
+    return lambda messages, schema, on_text=None: chat(
+        messages, schema, keep_alive=keep_alive, on_text=on_text
+    )

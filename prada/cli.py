@@ -144,6 +144,12 @@ def _voice(args) -> int:
     except devices.errors() as e:
         print(f"prada: {e}", file=sys.stderr)
         return 1
+    finally:
+        for device in (ears, mouth):
+            try:
+                device.close()
+            except devices.errors():
+                pass  # already gone with the error that ended the loop
 
 
 def _train(args) -> int:

@@ -54,6 +54,13 @@ class Context:
     # Searches her memory of earlier conversations for a message and returns the few best
     # matches as lines of text ("" if none); the tutor never calls it. Read-only.
     recall: Callable[[str], str] = lambda text: ""  # noqa: E731
+    # What the node's own code knows right now (date and time, when they last talked,
+    # actions that ran or were dropped), one line each, for prada.status.attach. Read-only.
+    status: list[str] = field(default_factory=list)
+    # Speaks a finished sentence of the reply right away (voice clients), or None. Given
+    # only to modules without executors, whose text the node never changes, and every
+    # sentence said must be the start of `Reply.text`, in order.
+    say: Callable[[str], None] | None = None
 
 
 class Module:
@@ -69,9 +76,15 @@ class Module:
     # so later turns and summaries know where it came from (e.g. "[from a web search]").
     memory_note: ClassVar[str] = ""
 
-    def claims(self, text: str) -> bool:
+    def claims(self, text: str, state: dict) -> bool:
         """True when `text` plainly continues a conversation with this module, so the router
-        model is skipped. Only asked of the module the session is already talking to."""
+        model is skipped. Only asked of the module the session is already talking to;
+        `state` is the module's state for the session (read-only here)."""
+        return False
+
+    def wants(self, text: str) -> bool:
+        """True when `text` is an explicit command for this module ("note that ..."), so it
+        goes here without the router model, unless the current module claims it."""
         return False
 
     def accepts(self, text: str) -> bool:

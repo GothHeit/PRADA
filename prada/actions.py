@@ -100,6 +100,11 @@ class Executor:
         action's real values."""
         return f"Should I {action.describe()}?"
 
+    def filler(self, action: Action) -> str:
+        """What PRADA says out loud just before a slow action starts ("Let me look that
+        up."), so a voice doesn't sit in silence; "" for a quick one. Never says it's done."""
+        return ""
+
     def run(self, action: Action, ctx: "Context") -> dict:
         raise NotImplementedError
 

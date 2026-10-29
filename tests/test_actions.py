@@ -4,13 +4,18 @@ from typing import Literal
 import pytest
 
 from prada import node as node_module
-from prada import persona
+from prada import persona, status
 from prada.actions import Action, ActionFailed, Executor
 from prada.assistant import AssistantModule
 from prada.module import Module, Reply, Request
 from prada.node import Node
 from prada.notes import NotesModule, SaveNote, SaveNoteExecutor, note_text
 from prada.wake import WakeModule
+
+
+def bare(messages):
+    """The messages without the status block on the newest one."""
+    return [{**m, "content": status.detach(m["content"])} for m in messages]
 
 
 class Ping(Action):
@@ -175,7 +180,7 @@ def test_modules_share_the_conversation(monkeypatch):
     node.handle(Request(text="/notes note that milk", session="s"))
     node.handle(Request(text="/assistant what did I just ask?", session="s"))
     node.handle(Request(text="/assistant and before that?", session="s"))
-    assert seen[0][1:] == [
+    assert bare(seen[0][1:]) == [
         {"role": "user", "content": "note that milk"},
         {"role": "assistant", "content": persona.noted("milk")},
         {"role": "user", "content": "what did I just ask?"},

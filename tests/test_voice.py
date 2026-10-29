@@ -268,3 +268,44 @@ def test_no_telemetry_on_windows_either(monkeypatch):
     monkeypatch.setitem(sys.modules, "onnxruntime", ort)
     _no_telemetry()
     assert calls == [1]
+
+
+def test_speaker_drains_before_another_rate_and_closes(monkeypatch):
+    import sys
+    import types
+
+    events = []
+
+    class Stream:
+        latency = 0.0
+
+        def __init__(self, samplerate, **kw):
+            self.rate = samplerate
+
+        def start(self):
+            pass
+
+        def write(self, samples):
+            events.append(("write", self.rate))
+
+        def close(self):
+            events.append(("close", self.rate))
+
+    monkeypatch.setitem(sys.modules, "sounddevice", types.SimpleNamespace(OutputStream=Stream))
+    from prada.voice.devices import Speaker
+
+    speaker = Speaker("out")
+    monkeypatch.setattr(speaker, "drain", lambda: events.append(("drain", None)))
+    speaker.play([0], 16000)
+    speaker.play([0], 16000)
+    speaker.play([0], 22050)
+    speaker.close()
+    assert events == [
+        ("write", 16000),
+        ("write", 16000),
+        ("drain", None),
+        ("write", 22050),
+        ("close", 16000),
+        ("close", 22050),
+    ]
+    assert speaker.streams == {}

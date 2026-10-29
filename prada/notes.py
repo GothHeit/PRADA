@@ -26,12 +26,27 @@ MIGRATIONS = [
 ]
 SHOWN = 10  # most recent notes read back
 
-_POLITE = r"(?:please\s+)?(?:can|could|would|will)\s+you\s+"  # "can you note that...?"
+# "can you note that...?", "você pode anotar...?", "tu peux noter...?"
+_POLITE = (
+    r"(?:(?:please|por\s+favor|s'il\s+te\s+pla[iî]t)[\s,]+)?"
+    r"(?:(?:can|could|would|will)\s+you|(?:(?:você|voce|vc|tu)\s+)?(?:pode|poderia|podes|consegue)"
+    r"|tu\s+peux|peux-tu|pouvez-vous|(?:puedes|podrías))\s+"
+)
+_PLEASE = r"(?:(?:please|por\s+favor)[\s,]+)?"
 _SAVE = re.compile(
-    r"^(?:please\s+)?(?:"
-    + _POLITE
-    + r"(?:please\s+)?)?(?:(?:take|make|write)\s+(?:a\s+|this\s+)?note(?:\s+(?:that|of))?"
-    r"|note(?:\s+that)?|(?:write|jot|put)\s+(?:this|that|it)?\s*down)\s*[:,-]?\s*",
+    r"^" + _PLEASE + r"(?:" + _POLITE + _PLEASE + r")?(?:"
+    # English
+    r"(?:take|make|write)\s+(?:a\s+|this\s+)?note(?:\s+(?:that|of))?"
+    r"|note(?:\s+(?:that|que|ça))?|(?:write|jot|put)\s+(?:this|that|it)?\s*down"
+    # Portuguese and Spanish: "anota: comprar ovos", "toma nota que ...", "escreve aí ..."
+    r"|anot(?:a|e|ar)(?:\s+(?:aí|ai|isso|isto|que|aqui|para\s+mim|pra\s+mim))*"
+    r"|apunta(?:r)?(?:\s+(?:que|esto))?"
+    r"|(?:toma|tome|tomar|faz|faça|fazer)\s+(?:uma\s+)?nota(?:\s+(?:de|que|disso))?"
+    r"|(?:escreve|escreva|escrever)\s+(?:aí|ai|isso|isto)"
+    # French: "prends note que ...", "note ça", "écris ça"
+    r"|(?:prends|prenez|prendre)\s+(?:une\s+)?note(?:\s+(?:que|de))?|not(?:er|ez)(?:\s+que)?"
+    r"|(?:écris|écrivez|écrire)\s+(?:ça|cela)"
+    r")\b(?P<sep>\s*[:,\-–—]?)\s*",
     re.IGNORECASE,
 )
 _LIST = re.compile(
@@ -69,16 +84,19 @@ class SaveNoteExecutor(Executor):
 
 def note_text(text: str) -> str:
     """The note in "note that we're out of milk" ("we're out of milk")."""
-    return _SAVE.sub("", text.strip(), count=1).strip()
+    text = _SAVE.sub("", text.strip(), count=1).strip()
+    return text if re.search(r"\w", text) else ""  # "can you note that?" names no note
 
 
 def asks_to_save(text: str) -> bool:
-    """True when the person asks in words for a note ("note that...", "can you write this
-    down?"); a question that only mentions something, like "which camera was I thinking of
-    buying?", is not."""
+    """True when the person asks in words for a note, in English, Portuguese, Spanish or
+    French ("note that...", "can you write this down?", "anota: comprar ovos"); a question
+    that only mentions something, like "which camera was I thinking of buying?", is not."""
     text = text.strip()
-    if not _SAVE.match(text):
+    if not (m := _SAVE.match(text)):
         return False
+    if m["sep"].strip() and text[m.end() :].strip():
+        return True  # "write it down: is the dentist at 3?" dictates a question
     # "Can you note that...?" is a request; "note what I said?" reads as a question.
     return not router.is_question(text) or bool(re.match(_POLITE, text, re.IGNORECASE))
 
@@ -86,11 +104,15 @@ def asks_to_save(text: str) -> bool:
 class NotesModule(Module):
     name = "notes"
     description = (
-        'Saves a short note only when the user explicitly asks ("note that...", "write this '
-        'down...") and reads their notes back. Never for questions.'
+        'Saves a short note only when the user explicitly asks, in any language ("note '
+        'that...", "write this down...", "anota: ..."), and reads their notes back. Never for '
+        "questions."
     )
     migrations = MIGRATIONS
     executors = [SaveNoteExecutor()]
+
+    def wants(self, text: str) -> bool:
+        return asks_to_save(text)
 
     def accepts(self, text: str) -> bool:
         return asks_to_save(text) or bool(_LIST.match(text))

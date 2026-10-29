@@ -205,13 +205,15 @@ def test_search_terms():
 
 
 class Spy:
-    """Records the system prompt the assistant sent."""
+    """Records the system prompt the assistant sent and the newest message."""
 
     def __init__(self):
         self.system = None
+        self.last = None
 
     def __call__(self, messages, schema, model=None):
         self.system = messages[0]["content"]
+        self.last = messages[-1]["content"]
         return json.dumps({"reply": "ok"})
 
 
@@ -232,8 +234,9 @@ def test_assistant_gets_found_lines_and_tutor_does_not_search(monkeypatch):
     monkeypatch.setattr(n, "_chat", lambda fake: spy)
     reply = n.handle(Request(text="what was my turtle called?", module="assistant"))
     assert reply.error is None
-    assert "Found by searching your memory" in spy.system and "Donatello" in spy.system
-    assert "never add details" in spy.system
+    # Found lines change every turn, so they come in the status block, not the system prompt.
+    assert "Found by searching your memory" in spy.last and "Donatello" in spy.last
+    assert "Donatello" not in spy.system and "never add details" in spy.system
 
     spy.system = None
     calls = []
@@ -246,7 +249,7 @@ def test_assistant_gets_found_lines_and_tutor_does_not_search(monkeypatch):
 def test_assistant_without_matches_has_no_found_section():
     spy = Spy()
     AssistantModule().handle(Request(text="hello there"), Context(chat=spy))
-    assert "\n\nFound by searching" not in spy.system
+    assert "Found by searching" not in spy.last
 
 
 def test_context_recall_defaults_empty():

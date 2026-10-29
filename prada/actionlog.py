@@ -34,6 +34,7 @@ MIGRATIONS = [
 
 DETAIL_CHARS = 300
 SHOWN = 12  # most entries read out loud
+RECENT = 3  # most entries in the status block (prada.status)
 
 _ASKS = re.compile(
     r"\b(?:what|which)\s+(?:(?:did|have)\s+you\s+(?:do|done|been\s+up\s+to)|things\s+did\s+you\s+do)"
@@ -91,6 +92,15 @@ class ActionLog:
                     error,
                 ),
             )
+
+    def recent(self, since: float, limit: int = RECENT) -> list[str]:
+        """Her lines for the last `limit` entries since `since`, oldest first."""
+        rows = self._db.execute(
+            "SELECT ts, summary, confirmed, status, error FROM actionlog_entry"
+            " WHERE ts >= ? ORDER BY id DESC LIMIT ?",
+            (_utc(since), limit),
+        ).fetchall()
+        return [_line(r) for r in reversed(rows)]
 
     def day(self, when: str = "today") -> str:
         """What she did `when` (local time), from the log alone."""

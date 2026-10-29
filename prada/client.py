@@ -1,6 +1,7 @@
 """Talk to PRADA: through the home node when it is running, in-process otherwise.
 
-`connect()` returns a session whose `send(text, module=None, **options)` gives a Reply.
+`connect()` returns a session whose `send(text, module=None, speak=None, **options)` gives a
+Reply; `speak(kind, text)` hears what is said before it is done (see prada.node.Node.handle).
 Under PRADA_FAKE_LLM or PRADA_NODE=local it always runs in-process, so tests and smoke
 runs never reach a real node or model.
 """
@@ -32,9 +33,9 @@ class LocalSession:
         self.node = node or Node()
         self.id = uuid.uuid4().hex
 
-    def send(self, text: str, module: str | None = None, **options: str) -> Reply:
+    def send(self, text: str, module: str | None = None, speak=None, **options: str) -> Reply:
         request = Request(text=text, module=module, session=self.id, options=options)
-        return self.node.handle(request)
+        return self.node.handle(request, speak=speak)
 
 
 class RemoteSession:
@@ -43,16 +44,23 @@ class RemoteSession:
         self.timeout = timeout
         self.id = uuid.uuid4().hex
 
-    def send(self, text: str, module: str | None = None, **options: str) -> Reply:
+    def send(self, text: str, module: str | None = None, speak=None, **options: str) -> Reply:
         request = Request(text=text, module=module, session=self.id, options=options)
         req = urllib.request.Request(
-            f"{self.url}/v1/request",
+            f"{self.url}/v1/{'request' if speak is None else 'stream'}",
             data=request.model_dump_json().encode(),
             headers={"Content-Type": "application/json"},
         )
         try:
             with _opener.open(req, timeout=self.timeout) as response:
-                return Reply.model_validate_json(response.read())
+                if speak is None:
+                    return Reply.model_validate_json(response.read())
+                for line in response:
+                    event = json.loads(line)
+                    if "reply" in event:
+                        return Reply.model_validate(event["reply"])
+                    speak(event["kind"], event["say"])
+                raise ValueError("the stream ended without a reply")
         except urllib.error.HTTPError as e:
             raise NodeError(
                 f"the PRADA node at {self.url} refused the request ({_reason(e)})"

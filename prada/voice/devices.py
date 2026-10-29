@@ -182,6 +182,9 @@ class MicEars:
         segments = self.stt.transcribe(audio, language=self.language)
         return clean_transcript(" ".join(segment.text for segment in segments))
 
+    def close(self) -> None:
+        self.stream.close()
+
 
 def clean_transcript(text: str) -> str:
     """Drop whisper's non-speech tags such as [BLANK_AUDIO] or (music)."""
@@ -220,6 +223,8 @@ class Speaker:
                 samplerate=rate, channels=1, dtype="int16", device=self.device
             )
             stream.start()
+        if self.last is not None and self.last is not stream:
+            self.drain()  # another voice's rate: let the old stream finish first
         stream.write(samples)  # returns once buffered, not once heard
         self.last = stream
 
@@ -227,6 +232,12 @@ class Speaker:
         """Wait out what is still in the device's buffer, so the mic doesn't hear its tail."""
         if self.last is not None:
             time.sleep(self.last.latency + 0.05)
+
+    def close(self) -> None:
+        for stream in self.streams.values():
+            stream.close()
+        self.streams.clear()
+        self.last = None
 
 
 class PiperMouth:
@@ -254,6 +265,9 @@ class PiperMouth:
             for chunk in voice.synthesize(part):  # one sentence at a time
                 self._play(chunk.audio_int16_array, chunk.sample_rate)
         self.speaker.drain()
+
+    def close(self) -> None:
+        self.speaker.close()
 
 
 def build(s: VoiceSettings) -> tuple[MicEars, PiperMouth]:

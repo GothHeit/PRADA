@@ -5,11 +5,16 @@ import sqlite3
 
 import pytest
 
-from prada import llm, memory, persona
+from prada import llm, memory, persona, status
 from prada.assistant import AssistantModule
 from prada.module import Context, Request
 from prada.node import MAX_TURNS, SUMMARY_RETRY, Node
 from prada.notes import NotesModule
+
+
+def bare(messages):
+    """The messages without the status block on the newest one."""
+    return [{**m, "content": status.detach(m["content"])} for m in messages]
 
 
 class Clock:
@@ -66,7 +71,7 @@ def test_conversation_survives_a_restart(tmp_path, monkeypatch):
     ask(node(tmp_path, clock), "my name is Dana")
     clock.later(60)
     ask(node(tmp_path, clock), "what is my name?", sid="another session")
-    assert seen[-1][1:] == [
+    assert bare(seen[-1][1:]) == [
         {"role": "user", "content": "my name is Dana"},
         {"role": "assistant", "content": "ok"},
         {"role": "user", "content": "what is my name?"},
@@ -80,7 +85,7 @@ def test_a_long_silence_starts_a_new_conversation(tmp_path, monkeypatch):
     ask(n, "my name is Dana")
     clock.later(memory.EPISODE_GAP + 1)
     ask(n, "hello again")
-    assert seen[-1][1:] == [{"role": "user", "content": "hello again"}]
+    assert bare(seen[-1][1:]) == [{"role": "user", "content": "hello again"}]
 
 
 def test_history_is_capped_at_max_turns(tmp_path, monkeypatch):

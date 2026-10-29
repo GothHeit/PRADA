@@ -24,7 +24,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from prada import actionlog, actions, llm, persona, router
+from prada import actionlog, actions, llm, persona, router, status
 from prada.actionlog import MIGRATIONS as LOG_MIGRATIONS
 from prada.actionlog import ActionLog
 from prada.actions import Risk
@@ -40,6 +40,14 @@ SUMMARY_RETRY = 5 * 60  # seconds before trying again after a summary failed
 MAX_TURNS = 20  # messages of the current conversation given to a module
 PENDING_TTL = 60  # seconds a question about a risky action stays open
 SHORT_ANSWER_WORDS = 4  # a reply this short to a held question is never routed as chat
+
+
+Speak = Callable[[str, str], None]  # (kind, text): see Node.handle
+
+
+def _once(speak: Speak) -> Speak:
+    """`speak` without fillers."""
+    return lambda kind, text: None if kind == "filler" else speak(kind, text)
 
 
 @dataclass
@@ -84,14 +92,25 @@ class Node:
         self._dbs: dict[str, sqlite3.Connection | None] = {}
         self._sessions: OrderedDict[str, dict] = OrderedDict()
         self._lock = threading.Lock()
+        self._speak: Speak | None = None  # the current request's, while it is handled
 
-    def handle(self, request: Request, gone: Callable[[], bool] | None = None) -> Reply:
+    def handle(
+        self,
+        request: Request,
+        gone: Callable[[], bool] | None = None,
+        speak: "Speak | None" = None,
+    ) -> Reply:
         """`gone()` is asked once the node is free: True means whoever sent the request has
-        stopped waiting, so it is dropped instead of acting on it (e.g. a stale wake)."""
+        stopped waiting, so it is dropped instead of acting on it (e.g. a stale wake).
+
+        `speak(kind, text)` (voice clients) is called with what to say before the reply is
+        done: kind "part" is a finished sentence of `Reply.text` (they come in order, from
+        its start), "filler" a line said before a slow action, not part of the text."""
         with self._lock:
             name = request.module
             if gone is not None and gone():
                 return Reply(module=name, error="the client went away; request dropped")
+            self._speak = speak
             try:
                 session = self._session(request.session)
                 now = self._clock()
@@ -104,7 +123,7 @@ class Node:
                     self._remember(memory, request.text, reply)
                     return reply
                 if name is None:
-                    name, request = self._route(request, session.get("current"))
+                    name, request = self._route(request, session)
                 module = self.modules.get(name)
                 if module is None:
                     return Reply(module=name, error=f"no module named {name!r}")
@@ -118,9 +137,11 @@ class Node:
             except Exception as e:
                 return Reply(module=name, error=f"{name or 'router'}: {e}")
             finally:
+                self._speak = None
                 self._summarize_later()
 
     def _context(self, module: Module, session: dict, memory: Memory) -> Context:
+        speak = self._speak
         return Context(
             chat=self._chat(module.fake_chat),
             db=self._db(module),
@@ -128,7 +149,26 @@ class Node:
             turns=memory.recent(MAX_TURNS),
             memory=memory.remembered(),
             recall=lambda text: memory.recall(text, MAX_TURNS),
+            status=self._status(memory),
+            # A module with executors may have its text dropped by `_act`, so it never
+            # speaks early: nothing said aloud may turn out not to be the reply.
+            say=(lambda text: speak("part", text)) if speak and not module.executors else None,
         )
+
+    def _status(self, memory: Memory) -> list[str]:
+        """The facts for prada.status: the time, the last talk and what the action log
+        holds for this conversation (including a held action that was dropped)."""
+        now = self._clock()
+        lines = [status.now_line(now), status.since_line(memory.last_talk(), now)]
+        try:
+            done = self._actions().recent(now - EPISODE_GAP)
+        except sqlite3.Error as e:
+            print(f"actions: could not read the action log ({e})", file=sys.stderr)
+            done = []
+        if done:
+            since = f"last {EPISODE_GAP // 60} minutes"
+            lines.append(f"Your action log, {since}, in your words: " + "; ".join(done))
+        return lines
 
     def _answer(self, request: Request, session: dict, memory: Memory) -> Reply | None:
         """Handle a request that answers a held action or asks about the action log; None
@@ -205,6 +245,10 @@ class Node:
     def _do(self, module: Module, action: actions.Action, ctx: Context, confirmed: bool):
         allowed = {actions.kind_of(e.action): e for e in module.executors}
         executor = allowed.get(action.kind)
+        if self._speak and executor and isinstance(action, executor.action):
+            if line := executor.filler(action):
+                self._speak("filler", line)
+                self._speak = _once(self._speak)  # one filler per request is enough
         outcome = actions.execute(action, executor, ctx)
         refused = executor is None or not isinstance(action, executor.action)
         status = "refused" if refused else "done" if outcome.ok else "failed"
@@ -301,15 +345,20 @@ class Node:
         if pending:
             threading.Thread(target=self.summarize_pending, daemon=True).start()
 
-    def _route(self, request: Request, current: str | None) -> tuple[str, Request]:
+    def _route(self, request: Request, session: dict) -> tuple[str, Request]:
+        current = session.get("current")
         if hit := router.explicit(request.text, self.modules):
             name, text = hit
             return name, request.model_copy(update={"text": text})
         modules = list(self.modules.values())
         if len(modules) == 1:
             return modules[0].name, request
-        if current in self.modules and self.modules[current].claims(request.text):
-            return current, request  # no router call mid-conversation
+        if current in self.modules:
+            module = self.modules[current]
+            if module.claims(request.text, session.setdefault(current, {})):
+                return current, request  # no router call mid-conversation
+        if wanted := next((m.name for m in modules if m.wants(request.text)), None):
+            return wanted, request  # "anota: ..." in any other conversation, no router call
         name = router.route(request.text, modules, self._chat(router.fake_chat), current)
         if not self.modules[name].accepts(request.text):
             name = modules[0].name  # e.g. a question the model sent to notes

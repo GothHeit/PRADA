@@ -107,6 +107,10 @@ class Memory:
         ).fetchall()
         return [{"role": r["role"], "content": r["content"][:RECENT_CHARS]} for r in reversed(rows)]
 
+    def last_talk(self) -> float | None:
+        """When the last turn was stored, None if never."""
+        return self.db.execute("SELECT MAX(ts) FROM memory_turn").fetchone()[0]
+
     def add(self, said: str, replied: str) -> None:
         """Store a finished turn, starting a new episode after a long silence."""
         now = self.clock()

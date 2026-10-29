@@ -53,6 +53,9 @@ class SearchExecutor(Executor):
     def __init__(self, module: "WebModule"):
         self._module = module
 
+    def filler(self, action: SearchWeb) -> str:
+        return persona.looking_up()
+
     def run(self, action: SearchWeb, ctx: Context) -> dict:
         sources = self._module.sources()
         cache = Cache(None if llm.fake_enabled() else ctx.db)
@@ -208,8 +211,9 @@ class WebModule(Module):
     def page(self, url: str, query: str) -> Page:
         return read_page(url, query, self._get)
 
-    def claims(self, text: str) -> bool:
-        return plan.asked_to_search(text) or actions.answer(text) is not None
+    def claims(self, text: str, state: dict) -> bool:
+        # A yes or no only answers her offer to search, never anything else said to her.
+        return plan.asked_to_search(text) or ("offer" in state and actions.answer(text) is not None)
 
     def accepts(self, text: str) -> bool:
         # The internet can't know what the user said or planned before; her memory can.
