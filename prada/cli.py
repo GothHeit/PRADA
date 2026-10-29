@@ -38,6 +38,11 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--steps", type=int, help="training steps (default 50000)")
     train.add_argument("--out", help="folder or .onnx path for the model (default: voice models)")
 
+    persona = sub.add_parser("persona", help="show who PRADA is and where her persona file is")
+    persona_sub = persona.add_subparsers(dest="persona_command")
+    init = persona_sub.add_parser("init", help="write a persona file to edit (outside the repo)")
+    init.add_argument("--force", action="store_true", help="overwrite an existing persona file")
+
     tutor = sub.add_parser("tutor", help="practice a language with the offline tutor")
     from tutor.cli import add_arguments
 
@@ -95,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"PRADA node up at {url} (modules: {', '.join(modules)})")
     elif args.command == "voice":
         return _voice(args)
+    elif args.command == "persona":
+        return _persona(args)
     elif args.command == "eval" and args.suite == "assistant":
         from prada.eval import run as run_assistant_eval
 
@@ -111,6 +118,30 @@ def main(argv: list[str] | None = None) -> int:
         from tutor.cli import run
 
         return run(args.lang or "ru")
+    return 0
+
+
+def _persona(args) -> int:
+    from prada import persona
+
+    path = persona.persona_path()
+    if args.persona_command == "init":
+        if path.exists() and not args.force:
+            print(f"prada: {path} already exists (--force overwrites it)", file=sys.stderr)
+            return 1
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(persona.template(persona.CURRENT), encoding="utf-8")
+        print(f"Persona written to {path}; edit it, then restart the node.")
+        return 0
+    try:
+        current = persona.load(path)
+    except ValueError as e:
+        print(f"prada: {e}", file=sys.stderr)
+        return 1
+    source = path if path.is_file() else f"the default (no {path})"
+    print(f"Persona from {source}:\n")
+    print(persona.render(current))
+    print(f"\nTone: {current.tone}")
     return 0
 
 

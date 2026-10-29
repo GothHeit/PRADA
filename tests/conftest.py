@@ -1,4 +1,9 @@
+import os
+
 import pytest
+
+# prada.persona reads the persona file on import: tests always get the default one.
+os.environ["PRADA_PERSONA"] = os.path.join(os.devnull, "persona.toml")
 
 
 @pytest.fixture(autouse=True)

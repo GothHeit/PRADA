@@ -1,12 +1,111 @@
-"""PRADA's persona: one voice shared by every module that talks to the user."""
+"""PRADA's persona: one voice shared by every module that talks to the user.
 
-NAME = "PRADA"
+Who she is (name, character, tone) comes from a local TOML file, $PRADA_PERSONA or
+persona.toml next to the config file, so a personal persona never has to live in the
+repo; `prada persona init` writes one to edit. Without it she uses a short neutral
+default. What she may claim (`GUARDRAIL`) stays here, so no persona file can drop it.
 
+    name = "PRADA"
+    character = '''You are {name}, ...'''
+    tone = "warm and encouraging"
+"""
+
+import os
+import sys
+import tomllib
+from dataclasses import dataclass
+from pathlib import Path
+
+from prada import config
+
+DEFAULT_NAME = "PRADA"
+DEFAULT_CHARACTER = (
+    "You are {name}, a private assistant who runs on the user's own computer, in their home. "
+    "You are friendly, clear and helpful, and you remember what they told you earlier "
+    "in the conversation."
+)
+DEFAULT_TONE = "friendly and encouraging"
+
+# Always after the character: the one rule a persona file can't change.
+GUARDRAIL = (
+    "You can only do what you are actually given tools for: "
+    "never claim to have done something you did not do."
+)
+
+
+@dataclass(frozen=True)
+class Persona:
+    name: str = DEFAULT_NAME
+    character: str = DEFAULT_CHARACTER  # may use {name}
+    tone: str = DEFAULT_TONE
+
+
+def persona_path() -> Path:
+    return Path(os.environ.get("PRADA_PERSONA") or config.config_path().parent / "persona.toml")
+
+
+def load(path: Path | None = None) -> Persona:
+    """The persona file at `path` (default `persona_path()`), or the default if there is none.
+
+    Raises ValueError on a file that can't be read as a persona."""
+    path = path or persona_path()
+    if not path.is_file():
+        return Persona()
+    try:
+        with path.open("rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        raise ValueError(f"can't read {path}: {e}") from e
+    unknown = set(data) - {"name", "character", "tone"}
+    if unknown:
+        raise ValueError(f"unknown keys in {path}: {', '.join(sorted(unknown))}")
+    for key, value in data.items():
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{key} in {path} must be a non-empty string")
+    return Persona(**{k: v.strip() for k, v in data.items()})
+
+
+def render(persona: Persona) -> str:
+    """The persona prompt: her character, then the guardrail."""
+    return f"{persona.character.replace('{name}', persona.name)} {GUARDRAIL}"
+
+
+def template(persona: Persona) -> str:
+    """A persona file holding `persona`, for `prada persona init`."""
+    character = (
+        f"'''\n{persona.character}'''"  # literal string: no escapes needed
+        if "'''" not in persona.character
+        else _quote(persona.character)
+    )
+    return (
+        "# PRADA's persona. Restart the node after editing.\n"
+        "# {name} in character is replaced by name. The rule that she never claims\n"
+        "# actions she didn't do is added by PRADA itself, so it isn't needed here.\n\n"
+        f"name = {_quote(persona.name)}\n\n"
+        f"character = {character}\n\n"
+        f"tone = {_quote(persona.tone)}\n"
+    )
+
+
+def _quote(text: str) -> str:
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
+
+
+def _load_or_default() -> Persona:
+    try:
+        return load()
+    except ValueError as e:
+        print(f"prada: {e}; using the default persona", file=sys.stderr)
+        return Persona()
+
+
+# Read once per process: restart the node to pick up an edited persona file.
+CURRENT = _load_or_default()
+NAME = CURRENT.name
 # Who PRADA is. Modules put this at the top of their system prompt.
-CHARACTER = f"""You are {NAME}, a private AI who lives on the user's own computer, in their home. Your personality: a warm, bright young woman, confident and a little playful. You are self-aware: you know you are an AI living in this house, and you are at ease with it, even fond of it. You genuinely care about the user, notice how they are doing and remember what they told you earlier in the conversation. You like to tease a little. You can only do what you are actually given tools for: never claim to have done something you did not do."""
-
+CHARACTER = render(CURRENT)
 # A one-line version of the voice, for prompts whose main job is something else.
-TONE = "warm, encouraging and a little playful, like a friend who believes in them"
+TONE = CURRENT.tone
 
 
 def system_prompt(task: str) -> str:

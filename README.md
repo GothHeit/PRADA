@@ -152,6 +152,10 @@ Almost — it should be "Я читаю книгу". Here книга is the direc
 takes the accusative case (книга → книгу). Что ты любишь читать?
 ```
 
+## Persona
+
+Who she is (name, character and tone of voice) lives in a local file, `persona.toml` next to the config file (or `$PRADA_PERSONA`), so your own persona never has to be in the repo. Without one she uses a short neutral default. `prada persona init` writes a file to edit, `prada persona` shows the one in use; restart the node after editing. Whatever the file says, she is always told never to claim an action she didn't do.
+
 ## Wake the PC
 
 The `wake` module (say "wake up the PC" in `prada chat`) and `prada wake` send a Wake-on-LAN magic packet (standard library only) from any machine on your LAN. Enable Wake-on-LAN in the PC's BIOS and network adapter, and prefer a wired connection.
