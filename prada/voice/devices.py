@@ -16,6 +16,7 @@ from prada.voice.loop import (
     FRAME_SECONDS,
     SAMPLE_RATE,
     Endpointer,
+    respell,
     split_by_language,
     track_noise,
 )
@@ -127,8 +128,12 @@ class MicEars:
         self.wake = WakeModel(
             wakeword_models=[_wake_model(w) for w in s.wake_words], inference_framework="onnx"
         )
+        hint = {"initial_prompt": s.whisper_prompt} if s.whisper_prompt else {}
         self.stt = WhisperModel(
-            str(_whisper_model(s.whisper_model)), redirect_whispercpp_logs_to=None
+            str(_whisper_model(s.whisper_model)),
+            redirect_whispercpp_logs_to=None,
+            print_progress=False,
+            **hint,
         )
         self.stream = sd.RawInputStream(
             samplerate=SAMPLE_RATE,
@@ -179,7 +184,10 @@ class MicEars:
         if not end.heard:
             return ""
         audio = np.concatenate(frames).astype(np.float32) / 32768
-        segments = self.stt.transcribe(audio, language=self.language)
+        from pywhispercpp.utils import redirect_stderr
+
+        with redirect_stderr(to=None):  # whisper.cpp logs every language detection
+            segments = self.stt.transcribe(audio, language=self.language)
         return clean_transcript(" ".join(segment.text for segment in segments))
 
     def close(self) -> None:
@@ -251,6 +259,7 @@ class PiperMouth:
         self.voice = PiperVoice.load(_piper_voice(s.piper_voice))
         self.voices = {lang: PiperVoice.load(_piper_voice(v)) for lang, v in s.voices.items()}
         self.speaker = Speaker(s.output_device)
+        self.say_as = s.say_as
 
     def _play(self, samples, rate: int) -> None:
         self.speaker.play(samples, rate)
@@ -260,7 +269,7 @@ class PiperMouth:
         self.speaker.drain()
 
     def say(self, text: str) -> None:
-        for lang, part in split_by_language(text, self.voices):
+        for lang, part in split_by_language(respell(text, self.say_as), self.voices):
             voice = self.voices.get(lang, self.voice)
             for chunk in voice.synthesize(part):  # one sentence at a time
                 self._play(chunk.audio_int16_array, chunk.sample_rate)

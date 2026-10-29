@@ -216,7 +216,16 @@ def test_voice_settings(tmp_path):
     path.write_text('[voice]\nwake_words = "alexa"\n[voice.voices]\nru = "ru_RU-irina-medium"\n')
     s = config.voice_settings()
     assert s.wake_words == ("alexa",) and s.voices == {"ru": "ru_RU-irina-medium"}
-    for bad in ["wake_words = []", "volume = 3", 'threshold = "loud"', "wake_words = [1]"]:
+    path.write_text('[voice]\nwhisper_prompt = "Kitajima"\n[voice.say_as]\nKafka = "Kahfka"\n')
+    s = config.voice_settings()
+    assert s.whisper_prompt == "Kitajima" and s.say_as == {"Kafka": "Kahfka"}
+    for bad in [
+        "say_as = 1",
+        "wake_words = []",
+        "volume = 3",
+        'threshold = "loud"',
+        "wake_words = [1]",
+    ]:
         path.write_text(f"[voice]\n{bad}\n")
         with pytest.raises(ValueError):
             config.voice_settings()
@@ -229,6 +238,7 @@ def test_cli_voice_runs_on_text_fakes(monkeypatch, capsys):
     out = capsys.readouterr()
     assert "(fake assistant) what time is it" in out.out
     assert "you: what time is it" in out.err
+    assert "[assistant] prada: (fake assistant) what time is it" in out.err
 
 
 def test_cli_voice_reports_bad_config(monkeypatch, tmp_path, capsys):
@@ -309,3 +319,11 @@ def test_speaker_drains_before_another_rate_and_closes(monkeypatch):
         ("close", 22050),
     ]
     assert speaker.streams == {}
+
+
+def test_respell_swaps_whole_words_in_any_case():
+    say_as = {"Kafka": "Kahfka", "PRADA": "Prah-da"}
+    assert loop.respell("Hi kafka! I'm PRADA, not Kafkaesque.", say_as) == (
+        "Hi Kahfka! I'm Prah-da, not Kafkaesque."
+    )
+    assert loop.respell("unchanged", {}) == "unchanged"

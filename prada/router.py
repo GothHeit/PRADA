@@ -48,7 +48,8 @@ _QUESTION = re.compile(
 _OWN_PAST = re.compile(
     r"\b(?:(?:was|were|did)\s+i|i\s+(?:was|said|told|mentioned|wanted|thought"
     r"|planned|asked|bought|did)|(?:do|did)\s+you\s+(?:remember|recall)"
-    r"|(?:tell|told|said\s+to)\s+you|my\s+\w+(?:'s)?\s+name)\b",
+    r"|(?:do|did)\s+you\s+know\s+(?:who|what|which|where|when)\s+(?:my|i)"
+    r"|(?:tell|told|said\s+to)\s+you|my\s+\w+(?:'s)?\s+name|my\s+favou?rite)\b",
     re.IGNORECASE,
 )
 
@@ -58,10 +59,16 @@ def is_question(text: str) -> bool:
     return text.rstrip().endswith("?") or bool(_QUESTION.match(text.replace("\u2019", "'")))
 
 
+_TELL_ME = re.compile(r"\btell\s+me\s+(?:who|what|which|where|when)\b", re.IGNORECASE)
+
+
 def about_own_past(text: str) -> bool:
     """True for a question about the user's own past ("which camera was I thinking of
-    buying?", "do you remember my sister's name?"): only her memory can answer it."""
-    return is_question(text) and bool(_OWN_PAST.search(text.replace("\u2019", "'")))
+    buying?", "do you remember my sister's name?", "tell me who my favorite singer is"):
+    only her memory can answer it."""
+    text = text.replace("\u2019", "'")
+    asks = is_question(text) or bool(_TELL_ME.search(text))
+    return asks and bool(_OWN_PAST.search(text))
 
 
 def explicit(text: str, names) -> tuple[str, str] | None:

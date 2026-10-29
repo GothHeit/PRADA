@@ -67,6 +67,7 @@ wake_words = ["hey_jarvis", "~/prada/wake_up_prada.onnx"]  # pretrained names or
 threshold = 0.5             # wake word score that counts as heard
 whisper_model = "small"     # whisper.cpp model name (multilingual) or path to a ggml .bin
 language = "auto"           # or "en", "ru", ...
+whisper_prompt = "Kitajima, Monika"  # names whisper should spell right
 piper_voice = "en_US-amy-medium"
 input_device = "Microphone (USB Audio)"   # name or index from `prada voice devices`
 silence = 0.8               # seconds of quiet that end what you're saying
@@ -75,6 +76,9 @@ follow_up = 6.0             # seconds she keeps listening after a reply, no wake
 [voice.voices]              # sentences in these languages get their own voice
 ru = "ru_RU-irina-medium"
 fr = "fr_FR-siwis-medium"
+
+[voice.say_as]              # respell words so the voice says them right (whole words, any case)
+Kafka = "Kahfka"
 ```
 
 Write Windows paths in single quotes (`'C:\Users\you\wake_up_prada.onnx'`): in double quotes TOML reads `\U` as an escape. Any number of wake words listen at once. The pretrained ones are `alexa`, `hey_jarvis`, `hey_mycroft` and `hey_rhasspy`. "Wake Up Prada" needs its own model (see below). Models live in `<data dir>/voice` (`%USERPROFILE%\.local\share\prada\voice` on Windows); a bare name in `wake_words` is a model there if `<name>.onnx` exists, else a pretrained one. With `PRADA_FAKE_LLM=1`, `prada voice` reads requests from stdin and prints the replies, so it runs without audio or models.

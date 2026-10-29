@@ -88,6 +88,17 @@ def split_by_language(text: str, languages) -> list[tuple[str | None, str]]:
     return runs
 
 
+def respell(text: str, say_as: dict[str, str]) -> str:
+    """Swap whole words for the spellings that make the voice say them right."""
+    if not say_as:
+        return text
+    lookup = {word.lower(): spelling for word, spelling in say_as.items()}
+    words = "|".join(re.escape(word) for word in sorted(say_as, key=len, reverse=True))
+    return re.sub(
+        rf"\b(?:{words})\b", lambda m: lookup[m.group().lower()], text, flags=re.IGNORECASE
+    )
+
+
 def _speaker(mouth: Mouth, said: list[str]):
     """Says what the node streams at once; the reply's own sentences go in `said`."""
 
@@ -97,6 +108,16 @@ def _speaker(mouth: Mouth, said: list[str]):
             said.append(line)
 
     return speak
+
+
+def _log(module: str | None, line: str) -> None:
+    """Her side of the console log, next to the "[wake word] you: ..." lines."""
+    print(f"[{module or 'voice'}] prada: {line}", file=sys.stderr)
+
+
+def _say(mouth: Mouth, module: str | None, line: str) -> None:
+    _log(module, line)
+    mouth.say(line)
 
 
 def run(session, ears: Ears, mouth: Mouth, once: bool = False, follow_up: float = 0.0) -> int:
@@ -116,14 +137,16 @@ def run(session, ears: Ears, mouth: Mouth, once: bool = False, follow_up: float 
             try:
                 reply = session.send(text, speak=_speaker(mouth, said))
             except NodeError as e:
-                print(f"prada: {e}", file=sys.stderr)
-                mouth.say(CANT_REACH)
+                print(f"error: {e}", file=sys.stderr)
+                _say(mouth, "", CANT_REACH)
             else:
                 if reply.error:
-                    print(f"prada: {reply.error}", file=sys.stderr)
-                    mouth.say(WENT_WRONG)
-                elif left := rest(reply.text, said):
-                    mouth.say(left)
+                    print(f"error: {reply.error}", file=sys.stderr)
+                    _say(mouth, reply.module, WENT_WRONG)
+                else:
+                    _log(reply.module, reply.text)
+                    if left := rest(reply.text, said):
+                        mouth.say(left)
             if once:
                 return 0
             follow_ups += 1

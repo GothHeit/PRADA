@@ -84,9 +84,14 @@ class VoiceSettings:
     threshold: float = 0.5  # wake word score (0-1) that counts as heard
     whisper_model: str = "small"  # whisper.cpp model name or path to a ggml .bin
     language: str = "auto"  # what you speak: "auto" or a code such as "en", "ru"
+    # Text whisper reads before each request, e.g. names it should spell right ("Kitajima").
+    whisper_prompt: str = ""
     piper_voice: str = "en_US-amy-medium"  # Piper voice name or path to its .onnx
     # Voices for sentences in other languages, e.g. {"ru": "ru_RU-irina-medium"} ([voice.voices]).
     voices: dict[str, str] = field(default_factory=dict)
+    # How to spell words for the voice so she says them right ([voice.say_as]), e.g.
+    # {"Kafka": "Kahfka"}; whole words, any case. Only what she speaks changes.
+    say_as: dict[str, str] = field(default_factory=dict)
     input_device: str | int | None = None  # sounddevice name or index; None = default
     output_device: str | int | None = None
     silence: float = 0.8  # seconds of quiet that end what you're saying
@@ -104,6 +109,9 @@ def voice_settings() -> VoiceSettings:
     voices = file.get("voices", {})
     if not isinstance(voices, dict) or not all(isinstance(v, str) for v in voices.values()):
         raise ValueError(f"[voice.voices] in {config_path()} must map languages to voices")
+    say_as = file.get("say_as", {})
+    if not isinstance(say_as, dict) or not all(isinstance(v, str) for v in say_as.values()):
+        raise ValueError(f"[voice.say_as] in {config_path()} must map words to spellings")
     words = file.get("wake_words", VoiceSettings.wake_words)
     if isinstance(words, str):
         words = [words]

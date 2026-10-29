@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from prada import client, config, router
+from prada import client, config, persona, router
 from prada.assistant import AssistantModule
 from prada.cli import main
 from prada.module import Context, Module, Reply, Request
@@ -144,6 +144,43 @@ def test_wake_module(monkeypatch):
     node.handle(Request(text="wake up", session="s"))
     reply = node.handle(Request(text="yes", session="s"))
     assert reply.error is None and sent == [("aa:bb:cc:dd:ee:ff", "255.255.255.255", 9)]
+
+
+@pytest.mark.parametrize(
+    "text, wake",
+    [
+        ("wake up", True),
+        ("turn on my computer", True),
+        ("liga o pc", True),
+        ("wake the PC from sleep", True),
+        ("my computer is off, can you turn it on?", True),
+        ("start my pc", True),
+        ("start up the computer", True),
+        ("ligue o computador", True),
+        ("shut down the pc", False),
+        ("put the computer to sleep", False),
+        ("I'm leaving now, I'll turn you off for a moment.", False),
+        ("turn up the volume", False),
+        ("Do you know who my favorite singer is?", False),
+    ],
+)
+def test_wake_accepts_only_turning_the_pc_on(text, wake):
+    assert WakeModule().accepts(text) is wake
+
+
+def test_router_pick_of_wake_for_a_goodbye_goes_to_the_fallback(monkeypatch):
+    monkeypatch.setattr("prada.router.route", lambda *a, **k: "wake")
+    node = Node([AssistantModule(), WakeModule()])
+    reply = node.handle(Request(text="I'm leaving, I'll turn you off now", session="s"))
+    assert reply.module == "assistant" and not reply.actions
+
+
+def test_wake_without_a_mac_explains_in_her_words(monkeypatch, tmp_path, capsys):
+    monkeypatch.delenv("PRADA_WAKE_MAC", raising=False)
+    monkeypatch.setenv("PRADA_CONFIG", str(tmp_path / "none.toml"))
+    reply = Node([WakeModule()]).handle(Request(text="wake up", session="s"))
+    assert reply.error is None and reply.text == persona.cant_wake()
+    assert "wake: no MAC" in capsys.readouterr().err
 
 
 @pytest.fixture

@@ -35,6 +35,14 @@ def failed(what: str, reason: str) -> str:
     return f"I tried to {what}, but it didn't work: {reason.rstrip('. ')}."
 
 
+def cant_wake() -> str:
+    """Asked to wake the PC before its MAC address is in the config: nothing was sent."""
+    return (
+        "I can't wake your PC yet, I don't know its network address. "
+        "Add its MAC under [wake] in my config and I'll be able to."
+    )
+
+
 def noted(text: str) -> str:
     return f"Got it, I wrote that down: “{text}”."
 
