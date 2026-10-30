@@ -1,8 +1,9 @@
 """The real microphone, speakers and engines (needs `pip install "prada[voice]"`).
 
 openWakeWord listens for the wake words, whisper.cpp (pywhispercpp) transcribes, a TTS
-engine from `prada.voice.tts` speaks, and sounddevice moves the audio. Models live in `<data dir>/voice` and are fetched
-once by `prada voice setup`; after that nothing here touches the network.
+engine from `prada.voice.tts` speaks, and sounddevice moves the audio. Models live in
+`<data dir>/voice` and are fetched once by `prada voice setup`; after that nothing here
+touches the network.
 """
 
 import re
@@ -24,6 +25,7 @@ from prada.voice.loop import (
     track_noise,
 )
 
+RETRIES = 1  # listens again after speech whisper made no words of, this many times
 SETTLE = 0.3  # seconds of mic ignored after she speaks, before listening for a follow-up
 SLICE = 0.1  # seconds of audio written at a time, so an interruption cuts her off this fast
 MIN_NOISE = 100.0  # starting guess for the room's background loudness (int16 RMS)
@@ -188,8 +190,6 @@ class MicEars:
         debug("stopped watching")
 
     def listen(self, wait: float | None = None) -> str:
-        import numpy as np
-
         if not self.stream.active:
             self.stream.start()
         # Drop what was captured during the chime, so it isn't taken for speech.
@@ -198,6 +198,24 @@ class MicEars:
         if wait is not None:  # right after she spoke: let the room's echo of her voice die out
             for _ in range(round(SETTLE / FRAME_SECONDS)):
                 self.stream.read(FRAME)
+        for tries in range(1 + RETRIES):
+            heard, text = self._hear(wait)
+            if text or not heard:
+                break
+            # Speech whisper made no words of: say so and listen again (the mic kept
+            # running meanwhile, so nothing said since is lost).
+            again = tries < RETRIES
+            print(
+                f"voice: heard something but no words{'; listening again' if again else ''}",
+                file=sys.stderr,
+            )
+        self.stream.stop()  # deaf while thinking and speaking
+        return text
+
+    def _hear(self, wait: float | None) -> tuple[bool, str]:
+        """Record one request; (whether there was speech, its words)."""
+        import numpy as np
+
         debug("listening" + ("" if wait is None else f" for a follow-up ({wait:g} s)"))
         end = Endpointer(self.noise, self.silence, *([] if wait is None else [wait]))
         frames = []
@@ -205,18 +223,24 @@ class MicEars:
             frames.append(frame)
             if end.push(rms(frame)):
                 break
-        self.stream.stop()  # deaf while thinking and speaking
         debug(
             f"listened {end.frames * FRAME_SECONDS:.1f} s, {'speech' if end.heard else 'nothing'}"
         )
         if not end.heard:
-            return ""
+            return False, ""
+        if end.too_long:
+            print(
+                "voice: you were still talking at the length limit; the rest went unheard",
+                file=sys.stderr,
+            )
         audio = np.concatenate(frames).astype(np.float32) / 32768
         from pywhispercpp.utils import redirect_stderr
 
         with redirect_stderr(to=None):  # whisper.cpp logs every language detection
             segments = self.stt.transcribe(audio, language=self.language)
-        return clean_transcript(" ".join(segment.text for segment in segments))
+        raw = " ".join(segment.text for segment in segments)
+        debug(f"whisper: {raw.strip()!r}")
+        return True, clean_transcript(raw)
 
     def close(self) -> None:
         self.stream.close()

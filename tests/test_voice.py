@@ -82,6 +82,13 @@ def test_follow_up_keeps_listening_until_silence():
     assert ears.waits == [None, 4.0, 4.0, None, 4.0]
 
 
+def test_follow_ups_have_no_limit_at_zero():
+    replies = [Reply(text="ok") for _ in range(30)]
+    ears = FollowEars(["a"] + ["more"] * 29)
+    loop.run(Session(*replies), ears, Recorder(), follow_up=4.0, max_follow_ups=0)
+    assert ears.waits == [None] + [4.0] * 30  # every one answered, then silence
+
+
 def test_follow_up_off_returns_to_the_wake_word():
     session = Session(Reply(text="one"))
     ears = FollowEars(["a", "b"])
@@ -108,11 +115,18 @@ def test_follow_up_setting(tmp_path, monkeypatch):
     path = tmp_path / "config.toml"
     monkeypatch.setenv("PRADA_CONFIG", str(path))
     assert config.voice_settings().follow_up == 6.0
+    assert config.voice_settings().max_follow_ups == 20
     path.write_text("[voice]\nfollow_up = 0\n")
     assert config.voice_settings().follow_up == 0
     path.write_text("[voice]\nfollow_up = -1\n")
     with pytest.raises(ValueError, match="follow_up"):
         config.voice_settings()
+    path.write_text("[voice]\nmax_follow_ups = 0\n")
+    assert config.voice_settings().max_follow_ups == 0
+    for bad in ("-1", "2.5", "true"):
+        path.write_text(f"[voice]\nmax_follow_ups = {bad}\n")
+        with pytest.raises(ValueError, match="max_follow_ups"):
+            config.voice_settings()
 
 
 def test_chime_is_long_enough_to_hear_and_padded():
@@ -178,7 +192,10 @@ def test_endpointer_gives_up_without_speech_and_caps_length():
     results = [end.push(2500) for _ in range(frames(1))]
     assert results[-1] and not end.heard
     end = loop.Endpointer(noise=100, longest=2)
-    assert [end.push(5000) for _ in range(frames(2))][-1]
+    assert [end.push(5000) for _ in range(frames(2))][-1] and end.too_long
+    end = loop.Endpointer(noise=100, silence=0.8)
+    end.push(5000)
+    assert not any(end.push(50) for _ in range(frames(0.8) - 1)) and not end.too_long
 
 
 def test_noise_tracks_quiet_fast_and_loud_slowly():
@@ -331,3 +348,56 @@ def test_respell_swaps_whole_words_in_any_case():
         "Hi Kahfka! I'm Prah-da, not Kafkaesque."
     )
     assert loop.respell("unchanged", {}) == "unchanged"
+    assert loop.respell("I like C++ and Dr. Who.", {"C++": "C plus plus", "Dr.": "Doctor"}) == (
+        "I like C plus plus and Doctor Who."
+    )
+    assert loop.respell("abc", {"": "x"}) == "abc"
+
+
+def test_speech_without_words_is_reported_and_heard_again(monkeypatch, capsys):
+    np = pytest.importorskip("numpy")
+    import contextlib
+    import sys
+    import types
+
+    from prada.voice import devices
+
+    utils = types.ModuleType("pywhispercpp.utils")
+    utils.redirect_stderr = lambda to=None: contextlib.nullcontext()
+    monkeypatch.setitem(sys.modules, "pywhispercpp", types.ModuleType("pywhispercpp"))
+    monkeypatch.setitem(sys.modules, "pywhispercpp.utils", utils)
+
+    class Stream:
+        active, read_available = False, 0
+
+        def __init__(self):
+            self.frames = 0
+
+        def start(self):
+            self.active = True
+
+        def stop(self):
+            self.active = False
+
+        def read(self, n):
+            self.frames += 1
+            loud = self.frames % 40 < 10  # a short burst, then quiet
+            return np.full(n, 3000 if loud else 0, dtype=np.int16).tobytes(), False
+
+    class Whisper:
+        def __init__(self, *texts):
+            self.texts = list(texts)
+
+        def transcribe(self, audio, language=None):
+            return [types.SimpleNamespace(text=self.texts.pop(0))]
+
+    ears = devices.MicEars.__new__(devices.MicEars)
+    ears.stream, ears.noise, ears.silence, ears.language = Stream(), 100.0, 0.8, "en"
+    ears.stt = Whisper("[BLANK_AUDIO]", "what time is it")
+    assert ears.listen(6.0) == "what time is it"
+    assert "heard something but no words; listening again" in capsys.readouterr().err
+
+    ears.stt = Whisper("", "(music)")
+    assert ears.listen() == ""
+    err = capsys.readouterr().err
+    assert err.count("heard something but no words") == 2 and not ears.stream.active

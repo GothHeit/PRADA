@@ -265,8 +265,10 @@ def test_loop_speaks_early_and_only_the_rest_after():
 
 def test_follow_ups_are_capped():
     session = StreamingSession([], "ok")
-    loop.run(session, Ears("first", follow="the TV again"), Mouth(), follow_up=5.0)
-    assert session.sent == 1 + loop.MAX_FOLLOW_UPS
+    loop.run(
+        session, Ears("first", follow="the TV again"), Mouth(), follow_up=5.0, max_follow_ups=3
+    )
+    assert session.sent == 1 + 3
 
 
 def test_field_text_ignores_a_broken_escape():

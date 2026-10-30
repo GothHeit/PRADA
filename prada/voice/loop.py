@@ -5,11 +5,12 @@ a session (`prada.client`), so swapping in text fakes (`prada.voice.fake`) exerc
 whole loop without audio hardware or models.
 
 Barge-in: while she thinks and speaks (in a thread), ears that can (`BargeEars.watch`) keep
-listening for a wake word on the main thread, the only one that ever reads the mic; hearing one sets a `Barge`, she stops mid-sentence and listens again. Only the
-wake word interrupts her, not loudness: her own voice reaches the mic, and a model trained on
-a phrase won't fire on her speech unless she says that phrase, so a line that names a wake
-word is spoken with the barge held. The node is told what was heard (`session.cut`), so her
-memory doesn't assume she said the rest.
+listening for a wake word on the main thread, the only one that ever reads the mic; hearing
+one sets a `Barge`, she stops mid-sentence and listens again. Only the wake word interrupts
+her, not loudness: her own voice reaches the mic, and a model trained on a phrase won't fire
+on her speech unless she says that phrase, so a line that names a wake word is spoken with
+the barge held. The node is told what was heard (`session.cut`), so her memory doesn't
+assume she said the rest.
 """
 
 import re
@@ -28,7 +29,6 @@ SAMPLE_RATE = 16000  # what openWakeWord and whisper.cpp expect
 FRAME = 1280  # samples per frame: 80 ms, openWakeWord's step
 FRAME_SECONDS = FRAME / SAMPLE_RATE
 MIN_SPEECH_RMS = 300.0  # int16 loudness below which nothing counts as speech
-MAX_FOLLOW_UPS = 4  # replies in a row without a wake word (a TV can't chain them forever)
 VERBOSE = False  # `prada voice --verbose`: say what the ears and mouth are doing on stderr
 
 # What PRADA says when the request never got an answer.
@@ -110,7 +110,7 @@ class Endpointer:
     """Decides when a spoken request is over, one frame's loudness (RMS) at a time."""
 
     def __init__(
-        self, noise: float, silence: float = 0.8, wait: float = 5.0, longest: float = 15.0
+        self, noise: float, silence: float = 1.2, wait: float = 5.0, longest: float = 15.0
     ):
         self.level = max(noise * 3, MIN_SPEECH_RMS)
         self.silence_frames = max(1, round(silence / FRAME_SECONDS))
@@ -132,6 +132,11 @@ class Endpointer:
             return self.frames >= self.wait_frames
         return self.quiet >= self.silence_frames or self.frames >= self.longest_frames
 
+    @property
+    def too_long(self) -> bool:
+        """True when the request was still going on as it hit the longest length."""
+        return self.heard and self.frames >= self.longest_frames and not self.quiet
+
 
 def split_by_language(text: str, languages) -> list[tuple[str | None, str]]:
     """Cut a reply into runs of sentences, each tagged with its language when it is one of
@@ -151,12 +156,12 @@ def split_by_language(text: str, languages) -> list[tuple[str | None, str]]:
 
 def respell(text: str, say_as: dict[str, str]) -> str:
     """Swap whole words for the spellings that make the voice say them right."""
-    if not say_as:
+    lookup = {word.lower(): spelling for word, spelling in say_as.items() if word}
+    if not lookup:
         return text
-    lookup = {word.lower(): spelling for word, spelling in say_as.items()}
-    words = "|".join(re.escape(word) for word in sorted(say_as, key=len, reverse=True))
+    words = "|".join(re.escape(word) for word in sorted(lookup, key=len, reverse=True))
     return re.sub(
-        rf"\b(?:{words})\b", lambda m: lookup[m.group().lower()], text, flags=re.IGNORECASE
+        rf"(?<!\w)(?:{words})(?!\w)", lambda m: lookup[m.group().lower()], text, flags=re.I
     )
 
 
@@ -238,13 +243,14 @@ def run(
     follow_up: float = 0.0,
     barge_in: bool = False,
     wake_words=(),
+    max_follow_ups: int = 0,
 ) -> int:
     """Wake word -> request -> node -> spoken reply, until input ends; returns an exit code.
 
     She speaks each sentence as soon as the node has it, and a filler line before a slow
     action. After a reply she keeps listening for `follow_up` seconds, so the next request
-    needs no wake word (up to `MAX_FOLLOW_UPS` in a row); silence for that long sends her
-    back to waiting for one (0 turns it off).
+    needs no wake word (up to `max_follow_ups` in a row, 0 = no limit, so a TV can't chain
+    them forever); silence for that long sends her back to waiting for one (0 turns it off).
 
     With `barge_in` (`ears` must be `BargeEars`), a wake word while she thinks or speaks
     stops her; the node hears how much she said, and she listens for the new request at once.
@@ -289,6 +295,6 @@ def run(
             if once:
                 return 0
             follow_ups += 1
-            more = follow_up > 0 and follow_ups <= MAX_FOLLOW_UPS
+            more = follow_up > 0 and (not max_follow_ups or follow_ups <= max_follow_ups)
             text = ears.listen(follow_up) if more else ""
     return 0

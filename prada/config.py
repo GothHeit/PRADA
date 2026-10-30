@@ -157,8 +157,9 @@ class VoiceSettings:
     say_as: dict[str, str] = field(default_factory=dict)
     input_device: str | int | None = None  # sounddevice name or index; None = default
     output_device: str | int | None = None
-    silence: float = 0.8  # seconds of quiet that end what you're saying
+    silence: float = 1.2  # seconds of quiet that end what you're saying
     follow_up: float = 6.0  # seconds she keeps listening after a reply, no wake word (0 = off)
+    max_follow_ups: int = 20  # replies in a row without a wake word (0 = no limit)
     barge_in: bool = True  # a wake word while she talks stops her and she listens
 
 
@@ -188,6 +189,9 @@ def voice_settings() -> VoiceSettings:
         follow_up = float(file.get("follow_up", VoiceSettings.follow_up))
         if follow_up < 0:
             raise ValueError("follow_up must not be negative")
+        most = file.get("max_follow_ups", VoiceSettings.max_follow_ups)
+        if isinstance(most, bool) or not isinstance(most, int) or most < 0:
+            raise ValueError("max_follow_ups must be a whole number, 0 or more (0 = no limit)")
         if not isinstance(file.get("barge_in", True), bool):
             raise ValueError("barge_in must be true or false")
         if file.get("tts", "piper") not in TTS_ENGINES:

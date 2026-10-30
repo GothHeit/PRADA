@@ -56,8 +56,9 @@ tts = "piper"               # who speaks: "piper", "kokoro" or "qwen" (see Her v
 speed = 1.0                 # speaking speed for Piper and Kokoro (0.5-2)
 piper_voice = "en_US-amy-medium"
 input_device = "Microphone (USB Audio)"   # name or index from `prada voice devices`
-silence = 0.8               # seconds of quiet that end what you're saying
+silence = 1.2               # seconds of quiet that end what you're saying (raise it if she cuts you off)
 follow_up = 6.0             # seconds she keeps listening after a reply, no wake word needed (0 = off)
+max_follow_ups = 20         # replies in a row without a wake word (0 = no limit)
 barge_in = true             # say a wake word while she talks to stop her and ask something else
 
 [voice.voices]              # sentences in these languages get their own voice

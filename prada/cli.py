@@ -215,6 +215,7 @@ def _voice(args) -> int:
             settings.follow_up,
             settings.barge_in,
             settings.wake_words,
+            settings.max_follow_ups,
         )
     except KeyboardInterrupt:
         return 0
