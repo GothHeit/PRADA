@@ -148,6 +148,8 @@ class VoiceSettings:
     # Her reference clip: `<name>.wav` + `<name>.txt` in the voice models folder (made by
     # `prada voice design`), or a path to the .wav.
     qwen_voice: str = "her"
+    # How freely Qwen improvises each line (0.1-1.5): lower is steadier, higher livelier.
+    qwen_temperature: float = 0.8
     # Voices for sentences in other languages, e.g. {"ru": "ru_RU-irina-medium"} ([voice.voices]).
     voices: dict[str, str] = field(default_factory=dict)
     # How to spell words for the voice so she says them right ([voice.say_as]), e.g.
@@ -190,6 +192,9 @@ def voice_settings() -> VoiceSettings:
             raise ValueError("barge_in must be true or false")
         if file.get("tts", "piper") not in TTS_ENGINES:
             raise ValueError(f"tts must be one of {', '.join(TTS_ENGINES)}")
+        temperature = float(file.get("qwen_temperature", VoiceSettings.qwen_temperature))
+        if not 0.1 <= temperature <= 1.5:
+            raise ValueError("qwen_temperature must be between 0.1 and 1.5")
         speed = float(file.get("speed", VoiceSettings.speed))
         if not 0.5 <= speed <= 2:
             raise ValueError("speed must be between 0.5 and 2")
@@ -201,6 +206,7 @@ def voice_settings() -> VoiceSettings:
                 "silence": float(file.get("silence", VoiceSettings.silence)),
                 "follow_up": follow_up,
                 "speed": speed,
+                "qwen_temperature": temperature,
             }
         )
     except (TypeError, ValueError) as e:

@@ -76,7 +76,9 @@ def test_tts_settings(tmp_path):
     path.write_text('[voice]\ntts = "kokoro"\nspeed = 1.1\nkokoro_voice = "af_bella"\n')
     s = config.voice_settings()
     assert (s.tts, s.speed, s.kokoro_voice) == ("kokoro", 1.1, "af_bella")
-    for bad in ['tts = "elevenlabs"', "speed = 0", 'speed = "fast"']:
+    path.write_text("[voice]\nqwen_temperature = 0.5\n")
+    assert config.voice_settings().qwen_temperature == 0.5
+    for bad in ['tts = "elevenlabs"', "speed = 0", 'speed = "fast"', "qwen_temperature = 3"]:
         path.write_text(f"[voice]\n{bad}\n")
         with pytest.raises(ValueError):
             config.voice_settings()
@@ -110,13 +112,15 @@ def test_qwen_clones_her_clip_in_every_language(engines_installed):
     main, voices = tts.engines(config.VoiceSettings(tts="qwen"))
     assert isinstance(main, tts.Qwen) and voices["ja"] is voices["ru"] is main
     assert FakeQwen.loaded[1] == {"local_files_only": True}  # never downloads at runtime
-    assert main.model.warm
+    assert main.model.warm and FakeQwen.calls[0][0] == "Hi."  # a silent first line at load
     [(samples, rate)] = main.speak("Hello.", None)
     assert samples.tolist() == [16383, -32767] and rate == 24000
     assert len(list(main.speak("こんにちは。元気？", "ja"))) == 2  # one sentence at a time
     (_, lang, first), (_, ja, second) = FakeQwen.calls[-3:-1]
     assert first["ref_text"] == "Hi, it's me." and not first["xvec_only"]
     assert (lang, ja, second["xvec_only"]) == ("auto", "Japanese", True)
+    assert first["temperature"] == 0.8
+    assert first["max_new_tokens"] == tts.QWEN_MIN_STEPS + tts.QWEN_STEPS_PER_CHAR * 6
 
 
 def test_a_voice_that_wont_load_falls_back_to_piper(engines_installed, capsys):
@@ -171,3 +175,11 @@ def test_try_voice_times_each_line(engines_installed, monkeypatch, capsys):
 def test_qwen_splits_sentences_only_where_they_end():
     split = [s for s in tts.QWEN_SENTENCES.split("Hmm... It costs 3.50 today. 元気？うん。") if s]
     assert split == ["Hmm...", "It costs 3.50 today.", "元気？", "うん。"]
+
+
+def test_qwen_copies_only_the_timbre_of_a_clip_without_transcript(engines_installed):
+    (engines_installed / "monika.wav").write_bytes(b"")
+    main, _ = tts.engines(config.VoiceSettings(tts="qwen", qwen_voice="monika"))
+    assert isinstance(main, tts.Qwen) and main.ref_text == ""
+    list(main.speak("Hello.", None))
+    assert FakeQwen.calls[-1][2]["xvec_only"]

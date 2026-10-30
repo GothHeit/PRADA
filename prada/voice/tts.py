@@ -51,6 +51,8 @@ QWEN_LANGS = {
     "zh": "Chinese",
 }
 # Qwen's streamed chunks click where they join, so she says each sentence whole instead.
+QWEN_MIN_STEPS = 36  # codec steps (12 a second) any line may take
+QWEN_STEPS_PER_CHAR = 3  # speech runs ~1 step per character; the rest is slack
 QWEN_SENTENCES = re.compile(r"(?<=[.!?。！？])\s+|(?<=[。！？])")  # as split_by_language
 # What a designed voice says in her reference clip: varied sounds, a question, some warmth.
 DESIGN_LINE = (
@@ -61,10 +63,10 @@ DESIGN_LINE = (
 # `prada voice try`: the same lines for every engine, so they can be compared by ear.
 LISTENING_TEST = (
     "Good morning, Kafka. It's seven thirty, and it's raining a little outside.",
-    "Oh, you're back! I missed you. Did you get some rest today?",
+    "Oh, you're back! Long day? What are you up to tonight?",
     "Hmm... I'm not sure about that. Let me think for a second.",
     "Your favorite singer is Toru Kitajima, right? I like his voice too.",
-    "Okay, okay, I'll stop teasing you. For now.",
+    "Okay, okay, I won't do it. Yet.",
     "In French, you'd say: Je suis fatiguée, mais contente.",
     "おはようございます。今日もがんばりましょう。",
     "Я читаю книгу.",
@@ -140,23 +142,30 @@ class Kokoro:
 
 
 def qwen_voice(name: str) -> tuple[Path, str]:
-    """Her reference clip and what it says (`<name>.wav` + `<name>.txt`)."""
+    """Her reference clip and what it says (`<name>.wav` + `<name>.txt`). Without the .txt
+    only the clip's timbre is copied ("" here): less faithful, but a noisy or glitchy clip's
+    flaws don't carry over."""
     wav = Path(name).expanduser() if is_path(name) else models_dir() / f"{name}.wav"
+    if not wav.is_file():
+        raise ValueError(f"Qwen voice not found: {wav} (run `prada voice design`)")
     text = wav.with_suffix(".txt")
-    if not wav.is_file() or not text.is_file():
-        raise ValueError(f"Qwen voice not found: {wav} and {text.name} (run `prada voice design`)")
-    return wav, text.read_text(encoding="utf-8").strip()
+    return wav, text.read_text(encoding="utf-8").strip() if text.is_file() else ""
 
 
 class Qwen:
     """Qwen3-TTS cloning her reference clip on the GPU, a sentence at a time."""
 
-    def __init__(self, model: str, voice: str):
+    def __init__(self, model: str, voice: str, temperature: float = 0.8):
         from faster_qwen3_tts import FasterQwen3TTS
 
         self.ref_audio, self.ref_text = qwen_voice(voice)
+        self.temperature = temperature
         self.model = FasterQwen3TTS.from_pretrained(model, local_files_only=True)
         self.model.warmup()  # captures the CUDA graphs now, not during her first reply
+        # One line said to nobody: reads her clip once and settles the model, so her first
+        # real line doesn't come out stiff.
+        for _ in self.speak("Hi.", None):
+            pass
 
     def speak(self, text, lang):
         for sentence in QWEN_SENTENCES.split(text.strip()):
@@ -167,8 +176,13 @@ class Qwen:
                 QWEN_LANGS.get(lang, "auto") if lang else "auto",
                 ref_audio=str(self.ref_audio),
                 ref_text=self.ref_text,
-                # Another language: only her timbre, so her English clip doesn't bleed an accent.
-                xvec_only=lang is not None,
+                temperature=self.temperature,
+                repetition_penalty=1.1,  # Qwen's advice against looping
+                # She sometimes never ends a line ("Hmm..."): cap it at ~4x a normal pace.
+                max_new_tokens=QWEN_MIN_STEPS + QWEN_STEPS_PER_CHAR * len(sentence),
+                # Only her timbre for another language (her English clip doesn't bleed an
+                # accent in) or a clip without a transcript.
+                xvec_only=lang is not None or not self.ref_text,
             )
             yield _int16(audio[0]), rate
 
@@ -182,7 +196,7 @@ def engines(s: VoiceSettings) -> tuple[Engine, dict[str, Engine]]:
             main = Kokoro(s.kokoro_voice, s.speed)
             return main, {**piper, **dict.fromkeys(KOKORO_FOREIGN, main)}
         if s.tts == "qwen":
-            main = Qwen(s.qwen_model, s.qwen_voice)
+            main = Qwen(s.qwen_model, s.qwen_voice, s.qwen_temperature)
             return main, {**piper, **dict.fromkeys(QWEN_LANGS, main)}
     except (ImportError, ValueError, OSError, RuntimeError) as e:
         print(f"voice: {s.tts} didn't load, using Piper ({e})", file=sys.stderr)
