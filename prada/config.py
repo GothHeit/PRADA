@@ -138,7 +138,16 @@ class VoiceSettings:
     language: str = "auto"  # what you speak: "auto" or a code such as "en", "ru"
     # Text whisper reads before each request, e.g. names it should spell right ("Kitajima").
     whisper_prompt: str = ""
+    # Who speaks: "piper", "kokoro" (CPU) or "qwen" (GPU). Piper is the fallback if the
+    # others won't load, and speaks languages they can't.
+    tts: str = "piper"
+    speed: float = 1.0  # speaking speed (Piper, Kokoro); 1.1 = 10% faster
     piper_voice: str = "en_US-amy-medium"  # Piper voice name or path to its .onnx
+    kokoro_voice: str = "af_heart"  # a Kokoro voice name; its first letter sets the language
+    qwen_model: str = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"  # Hugging Face id, fetched by setup
+    # Her reference clip: `<name>.wav` + `<name>.txt` in the voice models folder (made by
+    # `prada voice design`), or a path to the .wav.
+    qwen_voice: str = "her"
     # Voices for sentences in other languages, e.g. {"ru": "ru_RU-irina-medium"} ([voice.voices]).
     voices: dict[str, str] = field(default_factory=dict)
     # How to spell words for the voice so she says them right ([voice.say_as]), e.g.
@@ -149,6 +158,9 @@ class VoiceSettings:
     silence: float = 0.8  # seconds of quiet that end what you're saying
     follow_up: float = 6.0  # seconds she keeps listening after a reply, no wake word (0 = off)
     barge_in: bool = True  # a wake word while she talks stops her and she listens
+
+
+TTS_ENGINES = ("piper", "kokoro", "qwen")
 
 
 def voice_settings() -> VoiceSettings:
@@ -176,6 +188,11 @@ def voice_settings() -> VoiceSettings:
             raise ValueError("follow_up must not be negative")
         if not isinstance(file.get("barge_in", True), bool):
             raise ValueError("barge_in must be true or false")
+        if file.get("tts", "piper") not in TTS_ENGINES:
+            raise ValueError(f"tts must be one of {', '.join(TTS_ENGINES)}")
+        speed = float(file.get("speed", VoiceSettings.speed))
+        if not 0.5 <= speed <= 2:
+            raise ValueError("speed must be between 0.5 and 2")
         return VoiceSettings(
             **{
                 **file,
@@ -183,6 +200,7 @@ def voice_settings() -> VoiceSettings:
                 "threshold": float(file.get("threshold", VoiceSettings.threshold)),
                 "silence": float(file.get("silence", VoiceSettings.silence)),
                 "follow_up": follow_up,
+                "speed": speed,
             }
         )
     except (TypeError, ValueError) as e:

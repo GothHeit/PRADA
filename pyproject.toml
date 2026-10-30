@@ -19,6 +19,16 @@ voice = [
     "sounddevice>=0.5",
     "numpy>=1.24",
 ]
+# Other voices for her ([voice] tts), on top of `voice`. Kokoro runs on the CPU.
+kokoro = ["kokoro-onnx>=0.5"]
+# Qwen3-TTS on an NVIDIA GPU. Install PyTorch with CUDA first (pytorch.org), else pip picks
+# a CPU-only build.
+qwen = [
+    "faster-qwen3-tts>=0.5",
+    # qwen-tts breaks on 5.17+: its "default" RoPE patch overrides the model's own and needs
+    # rope_theta, which MimiConfig lacks (and 5.21 made MimiModel.upsample read-only).
+    "transformers>=5.15.1,<5.17",
+]
 # Training your own wake words (`prada voice train`, Linux/WSL, Python 3.11: openwakeword
 # needs tflite-runtime there, which has no newer wheels). Several GB, mostly PyTorch.
 wakeword = [

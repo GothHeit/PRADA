@@ -1,4 +1,5 @@
 import argparse
+import dataclasses
 import sys
 
 from prada import config, wol
@@ -31,8 +32,16 @@ def main(argv: list[str] | None = None) -> int:
         "--verbose", action="store_true", help="log what the mic and speakers are doing"
     )
     voice_sub = voice.add_subparsers(dest="voice_command")
-    voice_sub.add_parser("setup", help="download the wake word, speech and voice models")
+    setup = voice_sub.add_parser("setup", help="download the wake word, speech and voice models")
+    setup.add_argument("--tts", choices=config.TTS_ENGINES, help="voice engine to fetch too")
     voice_sub.add_parser("devices", help="list microphones and speakers")
+    trial = voice_sub.add_parser("try", help="hear her voice say test lines, timed")
+    trial.add_argument("text", nargs="*", help="what to say (default: the listening test)")
+    trial.add_argument("--tts", choices=config.TTS_ENGINES, help="engine (default: [voice] tts)")
+    design = voice_sub.add_parser("design", help="make a Qwen3-TTS voice from a description")
+    design.add_argument("description", help='e.g. "a warm, playful young woman, soft voice"')
+    design.add_argument("--name", default="her", help="clip name (default: her)")
+    design.add_argument("--takes", type=int, default=3, help="clips to choose from (default 3)")
     train = voice_sub.add_parser("train", help="train your own wake word model (Linux/WSL)")
     train.add_argument("phrase", nargs="?", help='what you will say, e.g. "wake up prada"')
     train.add_argument("--setup", action="store_true", help="download the training data once")
@@ -167,16 +176,27 @@ def _voice(args) -> int:
 
     try:
         if args.voice_command == "setup":
+            if args.tts:
+                settings = dataclasses.replace(settings, tts=args.tts)
             devices.setup(settings)
             return 0
         if args.voice_command == "devices":
             print(devices.list_devices())
             return 0
+        if args.voice_command == "try":
+            if args.tts:
+                settings = dataclasses.replace(settings, tts=args.tts)
+            devices.try_voice(settings, [" ".join(args.text)] if args.text else None)
+            return 0
+        if args.voice_command == "design":
+            return _design(args)
         # Always the node: the voice side (e.g. Windows) has no model of its own.
         session = client.RemoteSession(client.node_url(args.port))
         ears, mouth = devices.build(settings)
     except ImportError as e:
-        print(f'prada: voice needs `pip install "prada[voice]"` ({e})', file=sys.stderr)
+        tts = "qwen" if args.voice_command == "design" else settings.tts
+        extra = "voice" if tts == "piper" else f"voice,{tts}"
+        print(f'prada: voice needs `pip install "prada[{extra}]"` ({e})', file=sys.stderr)
         return 1
     except devices.errors() as e:
         print(f"prada: {e}", file=sys.stderr)
@@ -207,6 +227,22 @@ def _voice(args) -> int:
                 device.close()
             except devices.errors():
                 pass  # already gone with the error that ended the loop
+
+
+def _design(args) -> int:
+    from prada.voice import tts
+
+    if args.takes < 1:
+        print("prada: --takes must be at least 1", file=sys.stderr)
+        return 1
+    print("Designing her voice (first run downloads ~4 GB) ...", file=sys.stderr)
+    for path in tts.design(args.description, args.name, args.takes):
+        print(path)
+    print(
+        f"Listen, then rename the one you like to {args.name}.wav (and its .txt), or set\n"
+        f'qwen_voice = "{args.name}-2" in [voice], with tts = "qwen".'
+    )
+    return 0
 
 
 def _train(args) -> int:

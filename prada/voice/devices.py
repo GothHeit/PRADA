@@ -1,7 +1,7 @@
 """The real microphone, speakers and engines (needs `pip install "prada[voice]"`).
 
-openWakeWord listens for the wake words, whisper.cpp (pywhispercpp) transcribes, Piper
-speaks, and sounddevice moves the audio. Models live in `<data dir>/voice` and are fetched
+openWakeWord listens for the wake words, whisper.cpp (pywhispercpp) transcribes, a TTS
+engine from `prada.voice.tts` speaks, and sounddevice moves the audio. Models live in `<data dir>/voice` and are fetched
 once by `prada voice setup`; after that nothing here touches the network.
 """
 
@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from prada.config import VoiceSettings
-from prada.store import data_dir
+from prada.voice import tts
 from prada.voice.loop import (
     FRAME,
     FRAME_SECONDS,
@@ -29,12 +29,8 @@ SLICE = 0.1  # seconds of audio written at a time, so an interruption cuts her o
 MIN_NOISE = 100.0  # starting guess for the room's background loudness (int16 RMS)
 
 
-def models_dir() -> Path:
-    return data_dir() / "voice"
-
-
-def _is_path(name: str) -> bool:
-    return name.endswith((".onnx", ".tflite", ".bin")) or "/" in name or "\\" in name
+models_dir = tts.models_dir
+_is_path = tts.is_path
 
 
 def _wake_model(word: str) -> str:
@@ -53,13 +49,6 @@ def _whisper_model(name: str) -> Path:
     path = Path(name).expanduser() if _is_path(name) else models_dir() / f"ggml-{name}.bin"
     if not path.is_file():
         raise ValueError(f"whisper model not found: {path} (run `prada voice setup`)")
-    return path
-
-
-def _piper_voice(name: str) -> Path:
-    path = Path(name).expanduser() if _is_path(name) else models_dir() / f"{name}.onnx"
-    if not path.is_file():
-        raise ValueError(f"Piper voice not found: {path} (run `prada voice setup`)")
     return path
 
 
@@ -84,6 +73,7 @@ def setup(s: VoiceSettings) -> None:
         if not _is_path(voice):
             print(f"Piper voice {voice} ...")
             download_voice(voice, target)
+    tts.setup(s)
     print(f"Voice models ready in {target}")
 
 
@@ -305,16 +295,13 @@ class Speaker:
         self.last = None
 
 
-class PiperMouth:
-    """Speaks with Piper voices through the speakers: the main one, and per-language ones
+class SpeakerMouth:
+    """Speaks through the speakers with her TTS engine (`[voice] tts`), and with the voice set
     for sentences in another language (e.g. the tutor's Russian)."""
 
     def __init__(self, s: VoiceSettings):
-        from piper import PiperVoice
-
         _no_telemetry()
-        self.voice = PiperVoice.load(_piper_voice(s.piper_voice))
-        self.voices = {lang: PiperVoice.load(_piper_voice(v)) for lang, v in s.voices.items()}
+        self.voice, self.voices = tts.engines(s)
         self.speaker = Speaker(s.output_device)
         self.say_as = s.say_as
 
@@ -327,9 +314,8 @@ class PiperMouth:
 
     def say(self, text: str, barge: Barge | None = None) -> bool:
         for lang, part in split_by_language(respell(text, self.say_as), self.voices):
-            voice = self.voices.get(lang, self.voice)
-            for chunk in voice.synthesize(part):  # one sentence at a time
-                if not self._play(chunk.audio_int16_array, chunk.sample_rate, barge):
+            for samples, rate in self.voices.get(lang, self.voice).speak(part, lang):
+                if not self._play(samples, rate, barge):
                     return False
         self.speaker.drain()
         return barge is None or not barge.is_set()
@@ -338,5 +324,30 @@ class PiperMouth:
         self.speaker.close()
 
 
-def build(s: VoiceSettings) -> tuple[MicEars, PiperMouth]:
-    return MicEars(s), PiperMouth(s)
+def build(s: VoiceSettings) -> tuple[MicEars, SpeakerMouth]:
+    return MicEars(s), SpeakerMouth(s)
+
+
+def try_voice(s: VoiceSettings, lines: list[str] | None = None) -> None:
+    """Say `lines` (default: the listening test) with her voice, printing how long each took
+    to start, so engines can be compared by ear and by speed."""
+    start = time.monotonic()
+    mouth = SpeakerMouth(s)
+    print(f"{s.tts}: loaded in {time.monotonic() - start:.1f} s", file=sys.stderr)
+    play = mouth._play
+    first = []
+
+    def timed(samples, rate, barge=None):
+        if not first:
+            first.append(time.monotonic())
+        return play(samples, rate, barge)
+
+    mouth._play = timed
+    try:
+        for line in lines or tts.LISTENING_TEST:
+            first.clear()
+            start = time.monotonic()
+            mouth.say(line)
+            print(f"{first[0] - start if first else 0:5.2f} s  {line}")
+    finally:
+        mouth.close()

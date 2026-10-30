@@ -37,10 +37,10 @@ In a Windows terminal, with Python 3.11+ (the venv lives on the Windows side, ou
 
 ```powershell
 py -m venv $HOME\prada-voice
-$HOME\prada-voice\Scripts\pip install "\\wsl$\Ubuntu\home\you\projetos\PRADA[voice]"
-$HOME\prada-voice\Scripts\prada voice setup     # download the models once (the only network use)
-$HOME\prada-voice\Scripts\prada voice devices   # list microphones and speakers
-$HOME\prada-voice\Scripts\prada voice           # listen; Ctrl+C to stop
+& $HOME\prada-voice\Scripts\pip install "\\wsl$\Ubuntu\home\you\projetos\PRADA[voice]"
+& $HOME\prada-voice\Scripts\prada voice setup     # download the models once (the only network use)
+& $HOME\prada-voice\Scripts\prada voice devices   # list microphones and speakers
+& $HOME\prada-voice\Scripts\prada voice           # listen; Ctrl+C to stop
 ```
 
 Settings go in `[voice]` of the config file (on Windows, `%USERPROFILE%\.config\prada\config.toml`); every key is optional:
@@ -52,6 +52,8 @@ threshold = 0.5             # wake word score that counts as heard
 whisper_model = "small"     # whisper.cpp model name (multilingual) or path to a ggml .bin
 language = "auto"           # or "en", "ru", ...
 whisper_prompt = "Kitajima, Monika"  # names whisper should spell right
+tts = "piper"               # who speaks: "piper", "kokoro" or "qwen" (see Her voice)
+speed = 1.0                 # speaking speed for Piper and Kokoro (0.5-2)
 piper_voice = "en_US-amy-medium"
 input_device = "Microphone (USB Audio)"   # name or index from `prada voice devices`
 silence = 0.8               # seconds of quiet that end what you're saying
@@ -67,6 +69,25 @@ Kafka = "Kahfka"
 ```
 
 Write Windows paths in single quotes (`'C:\Users\you\wake_up_prada.onnx'`): in double quotes TOML reads `\U` as an escape. Any number of wake words listen at once. The pretrained ones are `alexa`, `hey_jarvis`, `hey_mycroft` and `hey_rhasspy`. "Wake Up Prada" needs its own model (see [Your own wake words](#your-own-wake-words)). Models live in `<data dir>/voice` (`%USERPROFILE%\.local\share\prada\voice` on Windows); a bare name in `wake_words` is a model there if `<name>.onnx` exists, else a pretrained one. With `PRADA_FAKE_LLM=1`, `prada voice` reads requests from stdin and prints the replies, so it runs without audio or models.
+
+### Her voice
+
+Three engines can speak for her, picked by `tts`. Piper is the default and the fallback: if another engine won't load, `prada voice` says so and uses Piper, and Piper's `[voice.voices]` still speak the languages the other engine can't.
+
+- **Piper** (`voice` extra): fast and light, a bit robotic. One voice per language.
+- **Kokoro** (`kokoro` extra, `kokoro_voice = "af_heart"`): Kokoro-82M on the CPU, so no GPU memory taken from the brain, and much more natural. The first letter of the voice name is its accent (`a` American, `b` British). It speaks French itself (`ff_siwis`); Russian and Japanese go to Piper's `[voice.voices]` (kokoro-onnx reads kanji as "Chinese letter").
+- **Qwen3-TTS** (`qwen` extra, NVIDIA GPU): clones a short clip of her, so one voice speaks English, Japanese, French, Russian, Portuguese and more. The 0.6B model takes a few GB of GPU memory next to the brain. Install PyTorch with CUDA first (pytorch.org), then the extra.
+
+```powershell
+& $HOME\prada-voice\Scripts\pip install "\\wsl$\Ubuntu\home\you\projetos\PRADA[voice,kokoro,qwen]"
+& $HOME\prada-voice\Scripts\prada voice design "A young woman in her late teens, warm and gentle, playful and confident, clear soft voice, smiling as she talks"
+& $HOME\prada-voice\Scripts\prada voice setup --tts kokoro   # fetch an engine's model (default: the one in tts)
+& $HOME\prada-voice\Scripts\prada voice setup --tts qwen
+& $HOME\prada-voice\Scripts\prada voice try --tts kokoro
+& $HOME\prada-voice\Scripts\prada voice try --tts qwen "Say anything you like."
+```
+
+`prada voice design` describes her voice to Qwen3-TTS VoiceDesign (1.7B, a ~4 GB download on first use) and saves takes `her-1.wav`, `her-2.wav`, ... with what each says (`.txt`) in the voice models folder. Stop the node or `ollama stop` the brain first so it fits in GPU memory. Pick the take you like and set `qwen_voice = "her-2"` (or a path to any clean 5-15 s `.wav` with its transcript in a `.txt` next to it; keep such clips on your PC). `prada voice try` says a fixed set of test lines (her name, numbers, French, Japanese, Russian, a tease) with each engine and prints how long each took to start, so engines are compared by ear on the same lines.
 
 ### Your own wake words
 
