@@ -45,3 +45,43 @@ def detach(text: str) -> str:
     """The user's own words, without the status block."""
     head, sep, _ = text.rpartition(f"\n\n{OPEN}\n")
     return head if sep else text
+
+
+_NUMBERS = "a two three four five six seven eight nine ten eleven twelve".split()
+
+
+def _count(n: int, unit: str) -> str:
+    word = _NUMBERS[n - 1] if 1 <= n <= len(_NUMBERS) else str(n)
+    return f"{word} {unit}{'s' if n > 1 else ''}"
+
+
+def _part(hour: int) -> str:
+    if 5 <= hour < 12:
+        return "morning"
+    if 12 <= hour < 18:
+        return "afternoon"
+    return "evening" if 18 <= hour < 23 else "night"
+
+
+def perceived(ts: float, now: float) -> str:
+    """When something happened, as a person remembers it: "this morning", "yesterday
+    evening", "on Tuesday afternoon", "last week, one evening", "about three months ago,
+    one morning". Starts lower case."""
+    then, today = datetime.fromtimestamp(ts), datetime.fromtimestamp(now)
+    days = (today.date() - then.date()).days
+    part = _part(then.hour)
+    if days <= 0:
+        return "earlier tonight" if part == "night" else f"this {part}"
+    if days == 1:
+        return "last night" if part == "night" else f"yesterday {part}"
+    if days < 7:
+        return f"on {then.strftime('%A')} {part}"
+    if days < 14:
+        when = "last week"
+    elif days < 60:
+        when = f"about {_count(round(days / 7), 'week')} ago"
+    elif days < 365:
+        when = f"about {_count(round(days / 30.4), 'month')} ago"
+    else:
+        when = f"about {_count(round(days / 365), 'year')} ago"
+    return f"{when}, one {part}"
