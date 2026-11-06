@@ -24,7 +24,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from prada import actionlog, actions, llm, persona, router, status
+from prada import actionlog, actions, llm, persona, router, status, vectors
 from prada.actionlog import MIGRATIONS as LOG_MIGRATIONS
 from prada.actionlog import ActionLog
 from prada.actions import Risk
@@ -37,6 +37,7 @@ from prada.store import open_store
 KEEP_ALIVE = "30m"  # how long Ollama keeps the model loaded between requests
 MAX_SESSIONS = 64
 SUMMARY_RETRY = 5 * 60  # seconds before trying again after a summary failed
+EMBED_BATCH = 32  # texts embedded per model call
 OFFER_MODULE = "web"  # takes a module's offer to look something up (`Reply.offer`)
 MAX_TURNS = 20  # messages of the current conversation given to a module
 PENDING_TTL = 60  # seconds a question about a risky action stays open
@@ -90,6 +91,8 @@ class Node:
         self._memory: Memory | None = None
         self._summarizing = False
         self._retry_at = 0.0
+        self._indexing = False
+        self._embed_retry_at = 0.0
         self._log: ActionLog | None = None
         self._pending: dict[str | None, Pending] = {}  # by session id
         self.modules = {m.name: m for m in (modules or default_modules())}
@@ -332,7 +335,12 @@ class Node:
             except (sqlite3.Error, OSError, RuntimeError) as e:
                 print(f"memory: conversations won't be kept after a restart ({e})", file=sys.stderr)
                 db = open_store("memory", MEMORY_MIGRATIONS, ":memory:")
-            self._memory = Memory(db, self._clock)
+            try:
+                embedder = vectors.embedder(KEEP_ALIVE)
+            except ValueError as e:
+                print(f"memory: searching by keyword only ({e})", file=sys.stderr)
+                embedder = None
+            self._memory = Memory(db, self._clock, embedder)
         return self._memory
 
     def summarize_pending(self) -> None:
@@ -351,9 +359,16 @@ class Node:
             chat = self._chat(memory_fake_chat)
         try:
             for episode, transcript in jobs:
-                summary = "" if transcript is None else summarize(chat, transcript)
+                with self._lock:  # read per job: the one before may have added facts
+                    known = memory.known_facts(transcript or "")
+                notes = None if transcript is None else summarize(chat, transcript, known)
                 with self._lock:
-                    memory.store(episode, summary, model)
+                    if notes is None:
+                        memory.store(episode, "", model)
+                    else:
+                        summary = "" if memory.short(episode) else notes.summary
+                        ids = [k["id"] for k in known]
+                        memory.store(episode, summary, model, notes.facts, ids)
         except Exception as e:
             print(f"memory: could not summarize a conversation ({e})", file=sys.stderr)
             with self._lock:
@@ -362,15 +377,47 @@ class Node:
             with self._lock:
                 self._summarizing = False
 
+    def index_pending(self) -> None:
+        """Embed what has no vector yet (prada.vectors), a batch at a time; the model call
+        is made without the node lock. After a failure nothing is tried for `SUMMARY_RETRY`."""
+        while True:
+            with self._lock:
+                if self._indexing or self._clock() < self._embed_retry_at:
+                    return
+                memory = self._mem()
+                items = memory.vectors.missing(EMBED_BATCH)
+                if not items:
+                    return
+                self._indexing = True
+            try:
+                vecs = memory.vectors.embed([text for _, _, text in items])
+                with self._lock:
+                    memory.vectors.add(items, vecs)
+            except Exception as e:
+                print(f"memory: could not index for searching by meaning ({e})", file=sys.stderr)
+                with self._lock:
+                    self._embed_retry_at = self._clock() + SUMMARY_RETRY
+                return
+            finally:
+                with self._lock:
+                    self._indexing = False
+
+    def _background_work(self) -> None:
+        self.summarize_pending()
+        self.index_pending()
+
     def _summarize_later(self) -> None:
-        if not self._background or self._summarizing or self._clock() < self._retry_at:
+        if not self._background or self._summarizing or self._indexing:
             return
         try:
-            pending = self._mem().has_pending()
+            memory = self._mem()
+            pending = (self._clock() >= self._retry_at and memory.has_pending()) or (
+                self._clock() >= self._embed_retry_at and bool(memory.vectors.missing(1))
+            )
         except Exception:
             return
         if pending:
-            threading.Thread(target=self.summarize_pending, daemon=True).start()
+            threading.Thread(target=self._background_work, daemon=True).start()
 
     def _route(self, request: Request, session: dict) -> tuple[str, Request]:
         current = session.get("current")

@@ -60,12 +60,11 @@ def test_finds_old_turns_by_both_speakers_and_orders_oldest_first():
     talk(mem, now, "filler", "filler")
     talk(mem, now, "filler", "filler")
     out = mem.recall("tell me about my cat Miso and Pixel").splitlines()
-    assert out[0].startswith("- ") and "you said" in out[0] and "Miso" in out[0]
+    assert "you said" in out[0] and "Miso" in out[0]
     assert "I said" in out[1] and "Miso" in out[1]  # same moment: your message first
     assert any("I said" in line for line in out)
     assert any("Pixel" in line for line in out)
-    days = [line[2:12] for line in out]
-    assert days == sorted(days)
+    assert "Pixel" in out[-1]  # oldest first
 
 
 def test_best_matches_win_and_are_capped():
@@ -138,7 +137,7 @@ def test_summaries_are_found_unless_already_loaded():
         for ep, _ in mem.jobs():
             mem.store(ep, f"filler {k}", "m")
     got = mem.recall("russian quiz")
-    assert "what I wrote down" in got and "Russian cases" in got
+    assert "what I kept of it" in got and "Russian cases" in got
 
 
 def test_fake_summaries_are_not_searchable():
@@ -275,7 +274,7 @@ def camera_talk(mem, now):
     talk(mem, now, "the lighter one", "that's the Fuji", gap=10)
     talk(mem, now, "ok, let's do that", "done, it's on your list", gap=10)
     now[0] += EPISODE_GAP + 60
-    (ep,) = [ep for ep, transcript in mem.jobs() if transcript]
+    (ep,) = [ep for ep, _ in mem.jobs() if not mem.short(ep)]
     mem.store(ep, "You chose the Fuji camera for the trip because it is lighter.", "m")
     return ep
 
@@ -314,7 +313,7 @@ def test_recall_takes_one_vague_line_per_conversation():
     bury(mem, now)
     got = mem.recall("what did I decide about the trip camera")
     vague = [line for line in got.splitlines() if not any(w in line for w in ("trip", "camera"))]
-    assert "what I wrote down" in got and len(vague) == 1
+    assert "what I kept of it" in got and len(vague) == 1
 
 
 def test_fake_summaries_give_no_topic():

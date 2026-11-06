@@ -39,7 +39,9 @@ def pick(fake, summary_chat):
 
 def run_pending(mem, chat, model):
     for episode, transcript in mem.jobs():
-        mem.store(episode, "" if transcript is None else memory.summarize(chat, transcript), model)
+        notes = None if transcript is None else memory.summarize(chat, transcript)
+        summary = "" if notes is None or mem.short(episode) else notes.summary
+        mem.store(episode, summary, model)
 
 
 def node(tmp_path, clock, **kw):
@@ -141,7 +143,7 @@ def test_short_conversations_are_skipped_and_fake_summaries_never_loaded(tmp_pat
         return json.dumps({"summary": "S"})
 
     run_pending(mem, chat, "fake")
-    assert len(calls) == 1  # the one-exchange episode was skipped
+    assert len(calls) == 2  # the one-exchange episode is read for its facts only
     assert mem.remembered() == ""  # a fake summary is never loaded
     assert not mem.has_pending()
 
@@ -318,7 +320,9 @@ def test_summary_prompt_asks_for_first_person_and_skips_drills():
         seen.append(messages)
         return json.dumps({"summary": "You told me you study Russian."})
 
-    assert memory.summarize(chat, "User: hi\nPRADA: hello") == "You told me you study Russian."
+    assert (
+        memory.summarize(chat, "User: hi\nPRADA: hello").summary == "You told me you study Russian."
+    )
     system, user = seen[0][0]["content"], seen[0][1]["content"]
     assert "'I' for you and 'you' for them" in system and "never guess their gender" in system
     assert "not facts about them" in system  # drills are exercises

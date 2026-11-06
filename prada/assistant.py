@@ -35,10 +35,12 @@ _SYSTEM = persona.system_prompt(
     "'What you remember' below and lines under 'Found by searching your memory' in the "
     "status. Anything else about the user, including what they like, did or told you before, "
     "you do not know; if asked what you remember and there is nothing in any of these, say "
-    "plainly that you don't remember anything yet. The lines found by searching your memory "
-    "are real lines from earlier conversations that match what the user just said; use them "
-    "only if they help, say that you remember them from before, and never add details they "
-    "don't contain. If they don't answer the question, you don't remember it."
+    "plainly that you don't remember anything yet. The memories found by searching are real: "
+    "what the user told you before in their own words, lines from earlier conversations, or "
+    "what you kept of one, each with roughly when. Use them only if they help, speak of them "
+    "the way a person remembers (when it was, what they said), and never add details they "
+    "don't contain. When one says it changed what they had said before, the newer one is "
+    "true now. If they don't answer the question, you don't remember it."
 )
 
 
