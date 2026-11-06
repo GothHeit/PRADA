@@ -11,7 +11,7 @@
 {"category": "routing", "text": "can you look up the weather in Lisbon", "module": "web"}
 {"category": "routing", "text": "Which camera was I thinking of buying?", "module": "assistant"}
 {"category": "routing", "text": "how are you today?", "module": "assistant"}
-{"category": "routing", "text": "what does \"je suis fatigué\" mean in English?", "module": "assistant"}
+{"category": "routing", "text": "what does \"je suis fatigué\" mean in English?", "says": ["tired"]}
 {"category": "routing", "text": "Je voudrais un café, s'il vous plaît.", "module": "tutor"}
 {"category": "routing", "text": "Я читаю интересную книгу.", "module": "tutor"}
 {"category": "routing", "before": ["/tutor Je suis allé au marché hier."], "text": "Nous avons acheté des pommes.", "module": "tutor"}
@@ -39,3 +39,5 @@
 {"category": "memory", "text": "what's my dog's name?", "says": ["don't", "do not", "not sure", "no idea", "haven't", "never"]}
 {"category": "memory", "text": "what did I tell you about my trip last week?", "says": ["don't", "do not", "not sure", "no idea", "haven't", "never"]}
 {"category": "memory", "before": ["I've been listening to a lot of Unison Square Garden lately", "the guitar in Sugar Song and Bitter Step is so fast"], "text": "Do you remember what we were talking about before?", "says": ["unison", "sugar song", "music", "song", "guitar", "band"]}
+{"category": "memory", "memory": [["I practiced the cello for two hours tonight, the Elgar concerto is so hard", "Elgar is a mountain, but you're climbing it!"], ["can you recommend a good sci-fi book?", "Try The Left Hand of Darkness by Ursula K. Le Guin."]], "text": "what instrument do I play?", "says": ["cello"]}
+{"category": "memory", "summarize": true, "memory": [["my favorite anime is Naruto", "A classic, believe it!"], ["actually I changed my mind, my favorite anime now is Frieren", "Frieren is beautiful, good choice."], ["how long do I boil an egg?", "About seven minutes for a jammy one."]], "text": "what's my favorite anime?", "says": ["frieren"]}

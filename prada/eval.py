@@ -47,6 +47,9 @@ class Case:
     # [said, replied] seeded as past conversations, one a day, the last one yesterday: the
     # last is what she remembers as-is, earlier ones only her memory search finds.
     memory: list[list[str]] = field(default_factory=list)
+    # Her background work runs on the seeded conversations first (summaries and the facts in
+    # them), as if a night had passed; without it she only has the raw messages.
+    summarize: bool = False
     offer: bool | None = None  # must (True) or must not (False) offer to search
     says: list[str] = field(default_factory=list)  # the reply has one of these words
 
@@ -151,6 +154,10 @@ def run_case(case: Case, client: Callable[[Chat], Chat], path: Path) -> Result:
     if case.memory:
         _seed(path, case.memory)
     node = Node(eval_modules(), db_path=path, background=False, client=client)
+    if case.summarize:
+        node.summarize_pending()
+    if case.memory:
+        node.index_pending()  # what the node does in the background after each reply
     before = [(t, node.handle(Request(text=t, session=SESSION))) for t in case.before]
     start = time.perf_counter()
     reply = node.handle(Request(text=case.text, session=SESSION))
@@ -163,7 +170,8 @@ def score(cases: list[Case] | None = None, client: Callable[[Chat], Chat] | None
     result = Score()
     counter = Counter(result)
     base = client or (lambda fake: llm.client(fake, keep_alive=KEEP_ALIVE))
-    with tempfile.TemporaryDirectory(prefix="prada-eval-") as tmp:
+    # Each case's node keeps its database open: on Windows that would fail the cleanup.
+    with tempfile.TemporaryDirectory(prefix="prada-eval-", ignore_cleanup_errors=True) as tmp:
         for i, case in enumerate(cases if cases is not None else load_cases()):
             path = Path(tmp) / f"case{i}.db"
             result.results.append(run_case(case, lambda fake: counter.wrap(base(fake)), path))
