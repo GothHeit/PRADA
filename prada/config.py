@@ -22,6 +22,9 @@ The config file is TOML at $PRADA_CONFIG, or ~/.config/prada/config.toml:
 
     [web]
     github_token = "github_pat_..."
+
+    [memory]
+    embed_model = "nomic-embed-text"
 """
 
 import os
@@ -257,3 +260,37 @@ def web_settings() -> WebSettings:
         )
     except (TypeError, ValueError) as e:
         raise ValueError(f"bad [web] setting in {config_path()}: {e}") from e
+
+
+DEFAULT_EMBED_MODEL = "nomic-embed-text"
+
+
+@dataclass(frozen=True)
+class MemorySettings:
+    """The `[memory]` table: how she searches what she remembers by meaning."""
+
+    # Ollama embedding model (`ollama pull nomic-embed-text`); "" = keyword search only.
+    embed_model: str = DEFAULT_EMBED_MODEL
+    # How close in meaning (cosine, -1 to 1) a memory must be to count as found.
+    min_similarity: float = 0.5
+
+
+def memory_settings() -> MemorySettings:
+    """Resolve the memory settings from `[memory]` in the config file (defaults otherwise)."""
+    file = load_config().get("memory", {})
+    if not isinstance(file, dict):
+        raise ValueError(f"[memory] in {config_path()} must be a table")
+    if unknown := sorted(set(file) - set(MemorySettings.__dataclass_fields__)):
+        raise ValueError(f"unknown [memory] setting(s) in {config_path()}: {', '.join(unknown)}")
+    model = file.get("embed_model", DEFAULT_EMBED_MODEL)
+    if not isinstance(model, str):
+        raise ValueError(f'[memory] embed_model in {config_path()} must be a model name or ""')
+    try:
+        similarity = float(file.get("min_similarity", MemorySettings.min_similarity))
+    except (TypeError, ValueError):
+        similarity = None
+    if similarity is None or not -1 <= similarity <= 1:
+        raise ValueError(
+            f"[memory] min_similarity in {config_path()} must be a number from -1 to 1"
+        )
+    return MemorySettings(embed_model=model.strip(), min_similarity=similarity)
