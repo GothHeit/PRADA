@@ -537,6 +537,9 @@ def _fact_line(fact: sqlite3.Row, before: sqlite3.Row | None, now: float) -> str
     return line
 
 
+_CJK = re.compile("[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff66-\uff9f]")
+
+
 def _words(text: str) -> str:
     return " ".join(re.findall(r"\w+", plain(text.casefold())))
 
@@ -547,7 +550,10 @@ def _quoted(quote: str, said: list[sqlite3.Row]) -> sqlite3.Row | None:
     words = _words(quote)
     if len(words) < MIN_QUOTE:
         return None
-    return next((row for row in said if words in _words(row["content"])), None)
+    # Whole words ("the" is no evidence inside "there"); CJK has no spaces to match on.
+    pad = "" if _CJK.search(words) else " "
+    words = f"{pad}{words}{pad}"
+    return next((r for r in said if words in f"{pad}{_words(r['content'])}{pad}"), None)
 
 
 def summarize(chat: Callable[..., str], transcript: str, known=()) -> Summary:

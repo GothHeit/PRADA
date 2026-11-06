@@ -264,7 +264,7 @@ def at(*args):
     "then, said",
     [
         (at(2026, 11, 6, 9), "this morning"),
-        (at(2026, 11, 6, 2), "earlier tonight"),
+        (at(2026, 11, 6, 2), "last night"),  # read at 21:00, after the night ended
         (at(2026, 11, 5, 19), "yesterday evening"),
         (at(2026, 11, 5, 1), "last night"),
         (at(2026, 11, 3, 15), "on Tuesday afternoon"),
@@ -353,3 +353,33 @@ def test_node_summarizer_sees_known_facts_and_stores_new_ones(tmp_path, monkeypa
     first, second = n._mem().facts()
     assert first["superseded_by"] == second["id"]
     assert n._mem().remembered() == ""  # one exchange each: facts, but no summary
+
+
+def test_perceived_tonight_while_the_night_lasts():
+    assert status.perceived(at(2026, 11, 6, 1), at(2026, 11, 6, 3)) == "earlier tonight"
+    assert status.perceived(at(2026, 11, 6, 23), at(2026, 11, 6, 23, 30)) == "earlier tonight"
+
+
+def test_a_short_quote_must_be_whole_words():
+    mem, now = make()
+    talk(mem, now, "I went there yesterday")
+    finish(mem, now, {"there": [Fact(fact="You went.", quote="the")]})
+    assert mem.facts() == []
+    talk(mem, now, "日本語を勉強しています")
+    finish(mem, now, {"日本語": [Fact(fact="You study Japanese.", quote="日本語を勉強")]})
+    assert len(mem.facts()) == 1
+
+
+def test_odd_sized_vectors_are_dropped_not_the_rest():
+    mem, now = make(synonyms)
+    for text in ("cello", "violin", "concerto"):
+        talk(mem, now, text)
+    embed_all(mem)
+    first = mem.db.execute("SELECT kind, ref FROM memory_vector ORDER BY rowid").fetchone()
+    with mem.db:
+        mem.db.execute(
+            "UPDATE memory_vector SET vec = ? WHERE kind = ? AND ref = ?",
+            (np.zeros(7, dtype=np.float32).tobytes(), *first),
+        )
+    mem.vectors._load()
+    assert len(mem.vectors._keys) == 5 and mem.vectors._matrix.shape[1] == len(GROUPS) + 1
