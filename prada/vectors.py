@@ -16,6 +16,7 @@ everything the same way, since vectors are kept per model.
 import sys
 import time
 import zlib
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -155,15 +156,17 @@ class VectorIndex:
         self._matrix = None
 
     def _load(self) -> None:
-        keys, vecs = [], []
-        for kind, ref, blob in self.db.execute(
-            "SELECT kind, ref, vec FROM memory_vector WHERE model = ?", (self.embedder.model,)
-        ):
-            vec = np.frombuffer(blob, dtype=np.float32)
-            if vecs and vec.size != vecs[0].size:
-                continue  # written by another model under the same name
-            keys.append((kind, ref))
-            vecs.append(vec)
+        rows = [
+            (kind, ref, np.frombuffer(blob, dtype=np.float32))
+            for kind, ref, blob in self.db.execute(
+                "SELECT kind, ref, vec FROM memory_vector WHERE model = ?", (self.embedder.model,)
+            )
+        ]
+        sizes = Counter(vec.size for *_, vec in rows)
+        size = sizes.most_common(1)[0][0] if sizes else 0
+        # another model under the same name wrote the odd ones out
+        keys = [(kind, ref) for kind, ref, vec in rows if vec.size == size]
+        vecs = [vec for *_, vec in rows if vec.size == size]
         self._keys = keys
         self._matrix = np.vstack(vecs) if vecs else np.zeros((0, 0), dtype=np.float32)
 
