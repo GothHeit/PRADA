@@ -71,7 +71,10 @@ def perceived(ts: float, now: float) -> str:
     days = (today.date() - then.date()).days
     part = _part(then.hour)
     if days <= 0:
-        return "earlier tonight" if part == "night" else f"this {part}"
+        if part == "night":
+            # 02:00 seen from 10:00 is last night; from 03:00 or 23:30 it is tonight
+            return "last night" if then.hour < 5 and today.hour >= 5 else "earlier tonight"
+        return f"this {part}"
     if days == 1:
         return "last night" if part == "night" else f"yesterday {part}"
     if days < 7:
