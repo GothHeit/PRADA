@@ -406,7 +406,20 @@ def test_remote_session_reports_http_errors(served):
         client.RemoteSession(served + "/elsewhere").send("hi", "echo")
 
 
-def test_request_from_a_client_that_hung_up_is_dropped(node, served):
+def test_request_from_a_client_that_hung_up_is_dropped(node, served, monkeypatch):
+    # Syncs on events, not sleeps: the kernel may deliver the client's FIN a little after
+    # close() returns (e.g. on a busy WSL machine), so wait until the server can see it.
+    waiting, done, replies = threading.Event(), threading.Event(), []
+    handle = node.handle
+
+    def watched(request, gone=None, speak=None):
+        waiting.gone = gone
+        waiting.set()
+        replies.append(handle(request, gone, speak))
+        done.set()
+        return replies[-1]
+
+    monkeypatch.setattr(node, "handle", watched)
     port = int(served.rsplit(":", 1)[1])
     body = b'{"text": "late", "module": "echo"}'
     with node._lock:  # the node is busy with someone else's request
@@ -416,10 +429,17 @@ def test_request_from_a_client_that_hung_up_is_dropped(node, served):
             b"Content-Type: application/json\r\nContent-Length: %d\r\n\r\n%s"
             % (port, len(body), body)
         )
-        threading.Event().wait(0.3)  # the server has read the request and waits on the lock
+        assert waiting.wait(5)  # the server has read the request and waits on the lock
         sock.close()
-    threading.Event().wait(0.3)  # the server takes the lock, sees the hang-up, drops it
-    assert node.handle(Request(text="next", module="echo")).error is None
+        for _ in range(500):
+            if waiting.gone():
+                break
+            threading.Event().wait(0.01)
+        else:
+            pytest.fail("the server never saw the client hang up")
+    assert done.wait(5)  # the server takes the lock, sees the hang-up, drops it
+    assert "went away" in replies[0].error
+    assert handle(Request(text="next", module="echo")).error is None
     seen = node._dbs["echo"].execute("SELECT text FROM echo_seen").fetchall()
     assert [tuple(row) for row in seen] == [("next",)]
 
