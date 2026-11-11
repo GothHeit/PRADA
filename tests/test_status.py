@@ -31,7 +31,6 @@ def test_ago():
     assert status.ago(60) == "1 minute ago"
     assert status.ago(3 * 3600 + 50) == "3 hours ago"
     assert status.ago(2 * 86400) == "2 days ago"
-    assert status.since_line(None, 0) == "You have never talked before."
 
 
 def spy(monkeypatch):
@@ -63,7 +62,7 @@ def test_status_goes_last_and_the_prompt_start_stays_the_same(monkeypatch):
     last = second[-1]["content"]
     assert last.startswith("what time is it?\n\n<status>\n")
     assert "Now: Thursday 29 October 2026, 21:25" in last
-    assert "You last talked less than a minute ago." in last
+    assert "The user and PRADA last talked less than a minute ago." in last
     assert "you asked me to save that note, and I did" in last
     assert "Thursday 29 October 2026, 21:05" in first[-1]["content"]
     assert "never talked before" in first[-1]["content"]
