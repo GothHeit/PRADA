@@ -80,6 +80,9 @@ class Context:
     # only to modules without executors, whose text the node never changes, and every
     # sentence said must be the start of `Reply.text`, in order.
     say: Callable[[str], None] | None = None
+    # What she can do (prada.situation.ability_lines), one line each; changes only when a
+    # module becomes unusable, so the assistant keeps it in its system prompt. Read-only.
+    abilities: list[str] = field(default_factory=list)
 
 
 class Module:

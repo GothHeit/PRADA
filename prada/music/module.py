@@ -514,7 +514,7 @@ class MusicModule(Module):
     ability = (
         "play songs, albums, artists, playlists or moods from Spotify or the user's own music "
         "(Corpus); queue or shuffle in Corpus; pause, resume and skip what's playing; say what "
-        "it is"
+        "it is. Nothing else: it can't change the volume, playlists, likes or the Spotify library"
     )
     examples = ["play Space Dementia by Muse", "pause", "skip", "what's playing?"]
 

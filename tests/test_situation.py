@@ -123,16 +123,17 @@ def test_each_turn_shows_her_the_situation_and_the_trace_keeps_it(tmp_path):
         ability = "echo things"
 
         def handle(self, request, ctx):
-            seen.append(ctx.status)
+            seen.append((ctx.status, ctx.abilities))
             return Reply(module=self.name, text="ok")
 
     node = Node([Echo()], db_path=tmp_path / "p.db", background=False)
     source = Source(via="voice", start="wake word", language="pt", sure=0.2)
     node.handle(Request(text="oi", module="echo", session="s", source=source))
-    lines = seen[0]
+    lines, abilities = seen[0]
     assert any("after the wake word" in line and "in pt" in line for line in lines)
     assert any("misheard" in line for line in lines)
-    assert "- echo things" in lines
+    assert abilities == ["- echo things"]  # apart from the status: the same every turn
+    assert not any("echo things" in line for line in lines)
     turn = Trace(node._traces()._db).last(1)[0]
     assert "after the wake word" in turn["situation"]
     assert "echo things" not in turn["situation"]  # the same every turn: not kept
@@ -282,3 +283,24 @@ def test_a_broken_module_offers_no_ability(tmp_path, monkeypatch):
     node = Node([AssistantModule(), WakeModule()], db_path=":memory:", background=False)
     s = node.situation(None)
     assert s.broken and "wake" not in {a.name for a in s.abilities}
+
+
+def test_the_assistant_keeps_what_she_can_do_in_its_stable_system_prompt(monkeypatch):
+    seen = []
+
+    def chat(messages, schema, model=None, **kwargs):
+        seen.append(messages)
+        return '{"reply": "ok"}'
+
+    node = Node(
+        [AssistantModule(), WebModule()],
+        db_path=":memory:",
+        background=False,
+        client=lambda f: chat,
+    )
+    node.handle(Request(text="hi", module="assistant", session="s"))
+    node.handle(Request(text="and now?", module="assistant", session="s"))
+    first, second = seen
+    assert first[0] == second[0]
+    assert "What your system can do:\n- search the internet" in first[0]["content"]
+    assert "search the internet" not in second[-1]["content"]

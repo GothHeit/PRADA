@@ -123,13 +123,19 @@ def lines(s: Situation) -> list[str]:
             "What PRADA can do when the user asks plainly (her system does it and tells her "
             "how it went):"
         )
-        for a in s.abilities:
-            asks = ", ".join(f'"{e}"' for e in a.examples)
-            asks = f" (e.g. {asks})" if asks else ""
-            out.append(f"- {a.about}{asks}")
+        out += ability_lines(s.abilities)
     if s.remembered:
         out.append("What the user told PRADA in earlier conversations:")
         out += [f"- {r}" for r in s.remembered]
+    return out
+
+
+def ability_lines(abilities: list[Ability]) -> list[str]:
+    """One line per ability, with how to ask for it."""
+    out = []
+    for a in abilities:
+        asks = ", ".join(f'"{e}"' for e in a.examples)
+        out.append(f"- {a.about}" + (f" (e.g. {asks})" if asks else ""))
     return out
 
 

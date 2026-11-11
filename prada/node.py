@@ -281,7 +281,9 @@ class Node:
             turns=memory.recent(MAX_TURNS),
             memory=memory.remembered(),
             recall=lambda text: memory.recall(text, MAX_TURNS),
-            status=seen.lines(self._now) if self._now else [],
+            # what she can do goes apart: it is the same every turn (a stable prompt start)
+            status=seen.lines(replace(self._now, abilities=[])) if self._now else [],
+            abilities=seen.ability_lines(self._now.abilities) if self._now else [],
             # A module with executors may have its text dropped by `_act`, so it never
             # speaks early: nothing said aloud may turn out not to be the reply.
             say=(lambda text: speak("part", text)) if speak and not module.executors else None,

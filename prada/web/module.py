@@ -184,7 +184,10 @@ class WebModule(Module):
     migrations = MIGRATIONS
     fake_chat = staticmethod(fake_chat)
     memory_note = "[from a web search]"
-    ability = "search the internet, when the user asks to or says yes to an offer to look it up"
+    ability = (
+        "search the internet and read pages, when the user asks to or says yes to an offer to "
+        "look it up"
+    )
     examples = ["search for the weather in Porto", "look up the new Muse album"]
 
     def observe(self, state: dict, situation, current: bool) -> None:

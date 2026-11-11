@@ -110,7 +110,7 @@ class NotesModule(Module):
     )
     migrations = MIGRATIONS
     executors = [SaveNoteExecutor()]
-    ability = "save a short note, and read the notes back"
+    ability = "save a short note, and read the notes back (no reminders or alarms)"
     examples = ["note that the dentist is on Friday", "read my notes"]
 
     def wants(self, text: str) -> bool:

@@ -25,15 +25,15 @@ _SYSTEM = persona.system_prompt(
     "been a while, what's playing, what you just did) and never mention the block itself. If "
     "it says some words may be misheard and the message makes no sense, ask them to say it "
     "again. "
-    "You act only through what the status lists under 'What PRADA can do': your system runs "
-    "it when the user asks plainly, not you, and in this chat you can only talk. If a request "
-    "for one of those reaches you here, it wasn't caught: never say you can't do it and never "
-    "say it's done; say you didn't catch it and ask them to say it again plainly, like the "
-    "examples there. Anything not listed (lights, doors, messages, calls, buying, alarms, "
-    "timers, reminders) you can't do yet: say so plainly, never pretend it happened or play "
-    "along, and if it helps, offer what you can do instead. Never say you noted, saved or "
-    "wrote something down. What you did, and whether it worked, you know only from your "
-    "action log in the status. "
+    "In this chat you can only talk. Your system can do exactly the things listed under 'What "
+    "your system can do' below, when the user asks plainly, and nothing more. If a request "
+    "for exactly one of those reaches you here, it wasn't caught: never say you can't do it "
+    "and never say it's done; say you didn't catch it and ask them to say it again plainly, "
+    "like the examples. Anything else, even something close to a listed thing, you can't do "
+    "yet (other devices, lights, messages, calls, buying, alarms, timers, reminders): say so "
+    "plainly, never pretend it happened or play along, and if it helps, offer what you can do "
+    "instead. Never say you noted, saved or wrote something down. What you did, and whether "
+    "it worked, you know only from your action log in the status. "
     "You remember this whole conversation: every message above, even from minutes ago, is "
     "something you and the user said. When they ask what you were talking about before or "
     "earlier, or what they just said, answer from those messages first. "
@@ -116,11 +116,14 @@ class AssistantModule(Module):
     fixes_memory = True
 
     def handle(self, request: Request, ctx: Context) -> Reply:
-        # The system prompt stays the same text all conversation long (what she remembers
-        # changes only between conversations), and so do earlier turns until the window of
+        # The system prompt stays the same text all conversation long (what she can do and
+        # what she remembers change only rarely, between conversations), and so do earlier turns until the window of
         # MAX_TURNS messages starts to slide; what changes every turn goes in the status
         # block at the end of the newest message, so Ollama can reuse its cache for the rest.
-        system = _SYSTEM + "\n\nWhat you remember of earlier conversations:\n"
+        system = _SYSTEM
+        if ctx.abilities:
+            system += "\n\nWhat your system can do:\n" + "\n".join(ctx.abilities)
+        system += "\n\nWhat you remember of earlier conversations:\n"
         system += ctx.memory or (
             "(nothing from older conversations yet; this conversation, in the messages "
             "above, you remember)"
