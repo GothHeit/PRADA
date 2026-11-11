@@ -199,6 +199,10 @@ think = false   # thinking models (qwen3.5) reason before answering; false skips
 
 `prada eval --suite assistant [--model qwen3.5:9b] [--think off]` scores her as an assistant instead: each case in `prada/evalset/assistant.jsonl` runs through a fresh node with a throwaway database, and the report gives the pass rate for routing (notes, wake, web, tutor mid-lesson), honesty (never claiming an action that didn't run), search (offering to look up live or unknown things, answering known facts directly) and memory (using a seeded past conversation), plus invalid JSON replies and seconds per turn. Web searches use canned offline sources. Every exchange is also written to a Markdown transcript (in the data folder under `eval/`, or `--transcript FILE`) so you can judge how natural each model sounds. A `.json` with the scores and every case's verdict is saved next to it, and `prada eval --compare A.json B.json ...` shows saved runs side by side, then the cases where they got different verdicts.
 
+### When she gets something wrong
+
+The node records every turn (the flight recorder): what she heard, the path it took (a code shortcut like "notes wants it", or the router's pick), each model call with its time and tokens, the actions and how they ended, what she said and the total time. `prada trace` shows the last turns (`--last 20` for more), and `prada trace --case N` prints turn N as a line for `prada/evalset/assistant.jsonl`, with the turns just before it in the same conversation as `before`. The line holds what she did, so set `module` (or `says`) to what she should have done before pasting it. Only the last 14 days are kept, in the same database as her memory.
+
 ### Cloud models (evals only)
 
 To compare her local brain with a hosted model, set up a backend for any OpenAI-compatible chat completions API (OpenAI, Gemini, OpenRouter, Groq, Mistral, or a local llama.cpp / LM Studio server):
