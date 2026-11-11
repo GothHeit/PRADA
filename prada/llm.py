@@ -23,10 +23,11 @@ NUM_CTX = 8192
 _fake_notice_shown = False
 
 
-def chat(
-    messages, schema, model=config.DEFAULT_LLM_MODEL, keep_alive=None, on_text=None, think=None
-) -> str:
+def chat(messages, schema, model=None, keep_alive=None, on_text=None, think=None) -> str:
+    """`model` None = the configured brain (`[llm] model`)."""
     import ollama
+
+    model = model or model_name()
 
     args = dict(
         model=model,

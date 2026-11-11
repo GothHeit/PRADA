@@ -176,3 +176,14 @@ def test_prada_trace_shows_turns_and_prints_a_case(tmp_path, monkeypatch, capsys
     case = json.loads(capsys.readouterr().out)
     assert case == {"category": "routing", "text": "ping it please", "module": "ping"}
     assert cli.main(["trace", "--case", "999"]) == 1
+
+
+def test_chat_without_a_model_uses_the_configured_one(monkeypatch):
+    import sys
+    import types
+
+    seen = {}
+    fake = types.SimpleNamespace(chat=lambda **a: seen.update(a) or {"message": {"content": "{}"}})
+    monkeypatch.setitem(sys.modules, "ollama", fake)
+    monkeypatch.setenv("PRADA_LLM_MODEL", "qwen3.5:9b")
+    assert llm.chat([], {}) == "{}" and seen["model"] == "qwen3.5:9b"
