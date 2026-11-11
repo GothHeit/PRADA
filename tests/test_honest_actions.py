@@ -6,7 +6,7 @@ import pytest
 
 from prada import persona
 from prada.assistant import AssistantModule
-from prada.honesty import asks_action, claims_action
+from prada.honesty import asks_action, claims_action, offers_action
 from prada.module import Context, Request
 from prada.stream import rest
 
@@ -53,8 +53,33 @@ def test_a_yes_to_her_own_offer_cannot_claim_it_was_done():
     # "did you want me to pause it?" "Yeah." Nothing was held for that yes, so nothing ran.
     paused = "I couldn't pause it, I have no way to reach the player from here."
     chat, calls = scripted([ok("Done! It's paused for now."), ok(paused)])
-    reply = AssistantModule().handle(Request(text="Yeah."), Context(chat=chat))
+    offer = [{"role": "user", "content": "this song again"}]
+    offer.append({"role": "assistant", "content": "Did you want me to pause it?"})
+    reply = AssistantModule().handle(Request(text="Yeah."), Context(chat=chat, turns=offer))
     assert reply.text == paused and len(calls) == 2
+
+
+def test_an_ok_after_chat_is_not_guarded():
+    # Nothing was offered, so "all set" is chat, not a claim to take back.
+    chat, calls = scripted([ok("Great, then you're all set for the exam!")])
+    talk = [{"role": "user", "content": "I studied all week"}]
+    talk.append({"role": "assistant", "content": "Do you feel ready for Friday?"})
+    reply = AssistantModule().handle(Request(text="ok"), Context(chat=chat, turns=talk))
+    assert reply.text == "Great, then you're all set for the exam!" and len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("said", "offers"),
+    [
+        ("Want me to pause it?", True),
+        ("I can't reach it. Should I set a reminder instead?", True),
+        ("Did you sleep well?", False),
+        ("Want me to pause it? You seem tired.", False),
+        ("", False),
+    ],
+)
+def test_offers_action(said, offers):
+    assert offers_action(said) is offers
 
 
 def test_claiming_twice_gives_the_safe_line():
