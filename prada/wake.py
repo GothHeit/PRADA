@@ -62,6 +62,14 @@ class WakeModule(Module):
     name = "wake"
     description = "Turns on (wakes) the home PC with a Wake-on-LAN packet."
     executors = [SendWakeExecutor()]
+    ability = "turn on the user's PC (it can only turn it on)"
+    examples = ["wake up the PC"]
+
+    def observe(self, state: dict, situation) -> None:
+        try:
+            config.wake_settings(None, None, None)
+        except ValueError:
+            situation.broken.append("turning on the PC: no PC address is set up")
 
     def accepts(self, text: str) -> bool:
         return asks_to_wake(text)

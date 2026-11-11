@@ -14,13 +14,13 @@ Pure: nothing but `chat` is called and nothing runs. Nothing at runtime uses it 
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from pydantic import BaseModel, ValidationError
 
 from prada.module import Chat
 from prada.music.play import fold
-from prada.status import now_line
+from prada.situation import Option, Player, Situation, render  # noqa: F401 (Option: re-export)
 
 APPS = ("Spotify", "Corpus")
 KINDS = ("any", "song", "album", "artist", "playlist", "mood")
@@ -133,60 +133,10 @@ def schema() -> dict:
 # --- the situation ----------------------------------------------------------------------
 
 
-@dataclass
-class Player:
-    app: str  # "Spotify", "Corpus"
-    state: str  # "playing", "paused", "stopped"
-    title: str = ""
-    artist: str = ""
-
-
-@dataclass
-class Option:
-    label: str  # "the album: Wave by Antonio Carlos Jobim"
-    tracks: int = 0
-    app: str = ""
-
-
-@dataclass
-class Situation:
-    now: float
-    players: list[Player] = field(default_factory=list)
-    question: str = ""  # what PRADA asked the user to choose, waiting for the answer
-    options: list[Option] = field(default_factory=list)  # numbered from 1
-    offer: str = ""  # what PRADA offered to look up online, waiting for a yes
-    remembered: list[str] = field(default_factory=list)  # what the user told her before
-
-
-def render(s: Situation) -> str:
-    lines = [now_line(s.now)]
-    if s.players:
-        lines.append("Music players:")
-        for p in s.players:
-            what = f' "{p.title}"' + (f" by {p.artist}" if p.artist else "") if p.title else ""
-            lines.append(f"- {p.app}: {p.state}{what}")
-    else:
-        lines.append("Music players: none open.")
-    if s.options:
-        lines.append(f'Waiting for the user to choose: PRADA asked "{s.question}"')
-        for n, o in enumerate(s.options, 1):
-            extra = ", ".join(x for x in (_songs(o.tracks), o.app) if x)
-            lines.append(f"  {n}. {o.label}" + (f" ({extra})" if extra else ""))
-    if s.offer:
-        lines.append(f'Waiting for a yes or no: PRADA offered to search online for "{s.offer}"')
-    if s.remembered:
-        lines.append("What the user told PRADA in earlier conversations:")
-        lines += [f"- {r}" for r in s.remembered]
-    return "\n".join(lines)
-
-
-def _songs(n: int) -> str:
-    return "" if not n else f"{n} song{'s' if n > 1 else ''}"
-
-
 def messages(situation: Situation, turns: list[tuple[str, str]], text: str) -> list[dict]:
-    """One user message: the situation, the last turns (user, PRADA), the newest words."""
-    parts = ["Situation:", render(situation), ""]
+    """One user message: the situation, the last turns (user, PRADA), the newest words.
+    The situation's abilities are left out: the tools in the prompt say what can be done."""
+    parts = ["Situation:", render(replace(situation, abilities=[])), ""]
     if turns:
         parts.append("Last turns:")
         for said, replied in turns:
@@ -215,7 +165,7 @@ class _Call(BaseModel):
 
 class _Reply(BaseModel):
     note: str
-    calls: list[dict]
+    calls: list
 
 
 @dataclass
@@ -256,10 +206,11 @@ def quote_ok(quote: str, said: list[str]) -> bool:
     return False
 
 
-def _player_for(tool: str, app: str, players: list[Player]) -> tuple[str, str]:
+def _player_for(tool: str, app: str, players: list[Player] | None) -> tuple[str, str]:
     """(app, "") when the player fits the tool, else ("", why). With no app named, the one
     player that fits is taken."""
     want = "paused" if tool == "music.resume" else "playing"
+    players = players or []
     fits = [p for p in players if p.state == want]
     if not app:
         if len(fits) == 1:

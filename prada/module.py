@@ -5,6 +5,9 @@ reads it), and `handle(request, ctx) -> Reply`. The node owns everything shared 
 it over in `Context`: the model client, the module's own tables in the shared store,
 per-session state and the conversation so far.
 
+What a module knows right now (players, a question it waits on, what isn't working) it adds
+to each turn's situation in `observe`; `ability` and `examples` say what she can do with it.
+
 A module that wants something done returns typed `Action`s in `Reply.actions` instead of
 doing it, and lists the `Executor`s it may use (see prada.actions). The node runs them after
 `handle` and adds what happened to the reply, so `Reply.text` must never claim an action
@@ -19,6 +22,7 @@ from typing import ClassVar
 from pydantic import BaseModel, Field
 
 from prada.actions import Action, Executor, Outcome
+from prada.situation import Situation, Source
 
 Chat = Callable[..., str]
 
@@ -28,6 +32,7 @@ class Request(BaseModel):
     module: str | None = Field(None, description="Skip the router and send to this module")
     session: str | None = Field(None, description="Conversation id; state is kept per session")
     options: dict[str, str] = Field(default_factory=dict, description="Module options, e.g. lang")
+    source: Source | None = Field(None, description="How it reached her; None = not said")
 
 
 class Cut(BaseModel):
@@ -67,8 +72,9 @@ class Context:
     # Searches her memory of earlier conversations for a message and returns the few best
     # matches as lines of text ("" if none); the tutor never calls it. Read-only.
     recall: Callable[[str], str] = lambda text: ""  # noqa: E731
-    # What the node's own code knows right now (date and time, when they last talked,
-    # actions that ran or were dropped), one line each, for prada.status.attach. Read-only.
+    # What the node's own code knows right now, one line each, for prada.status.attach: the
+    # situation of this turn (prada.situation: the time, when they last talked, how the words
+    # reached her, what is playing, what she did lately, what she can do). Read-only.
     status: list[str] = field(default_factory=list)
     # Speaks a finished sentence of the reply right away (voice clients), or None. Given
     # only to modules without executors, whose text the node never changes, and every
@@ -91,6 +97,10 @@ class Module:
     # True = when they say she got a word wrong ("velvet, not valve") the node fixes her
     # memory after this module answers (prada.memory.Memory.correct).
     fixes_memory: ClassVar[bool] = False
+    # What she can do with this module, one line said to her, and how to ask for it
+    # plainly; shown under "What PRADA can do" in the situation ("" = nothing to show).
+    ability: ClassVar[str] = ""
+    examples: ClassVar[list[str]] = []
 
     def claims(self, text: str, state: dict) -> bool:
         """True when `text` plainly continues a conversation with this module, so the router
@@ -119,6 +129,12 @@ class Module:
         songs), most useful first; `db` is the module's store (None if it has none). Read by
         the voice client for whisper's prompt, so keep it quick and never call the model."""
         return []
+
+    def observe(self, state: dict, situation: Situation) -> None:
+        """The module's state provider: add what it knows right now to this turn's
+        `situation` (its players, a question it is waiting on, a line under `broken` for what
+        isn't working). `state` is its state for the session (read-only here). Asked before
+        every turn, so keep it quick and never call the model."""
 
     def handle(self, request: Request, ctx: Context) -> Reply:
         raise NotImplementedError

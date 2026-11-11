@@ -19,6 +19,7 @@ class TutorModule(Module):
     )
     migrations = memory.MIGRATIONS
     fake_chat = staticmethod(fake_client.chat)
+    ability = "practise Japanese, French or Russian: correct what the user writes in them"
 
     def claims(self, text: str, state: dict) -> bool:
         return detect_language(text) is not None

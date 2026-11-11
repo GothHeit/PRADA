@@ -29,6 +29,7 @@ import unicodedata
 from typing import ClassVar, Literal
 
 from prada import llm, vocabulary
+from prada import situation as seen
 from prada.actions import Action, ActionFailed, Executor
 from prada.module import Context, Module, Reply, Request
 from prada.music import library
@@ -456,6 +457,7 @@ class _RealSpotify(SpotifyApi):
         open_app()
 
 
+CHOICES = {"song": "the song", "album": "the album", "artist": "everything by the artist"}
 _ACTIONS = {"pause": Pause, "resume": Resume, "next": Next, "previous": Previous}
 
 
@@ -480,7 +482,8 @@ def targets(verb: str, status: Status, app: str | None) -> list[Player] | str:
         paused = [p for p in rank if p.state == "paused"] or [p for p in rank if p.known]
         return paused[:1] or "There's nothing paused to resume."
     # next / previous: the one playing, else the one Windows shows, if it's a music player
-    chosen = playing[:1] or [p for p in rank if p.known or p.app == status.current][:1]
+    chosen = playing[:1] or [p for p in rank if p.known and p.app == status.current][:1]
+    chosen = chosen or [p for p in rank if p.known][:1]
     return chosen or quiet
 
 
@@ -507,6 +510,12 @@ class MusicModule(Module):
     )
     migrations = MIGRATIONS
     memory_note = "[music controls]"
+    ability = (
+        "play songs, albums, artists, playlists or moods from Spotify or the user's own music "
+        "(Corpus); queue or shuffle in Corpus; pause, resume and skip what's playing; say what "
+        "it is"
+    )
+    examples = ["play Space Dementia by Muse", "pause", "skip", "what's playing?"]
 
     def __init__(
         self,
@@ -605,6 +614,25 @@ class MusicModule(Module):
                 time.sleep(VERIFY_STEP)
         except BridgeError:
             return []
+
+    def observe(self, state: dict, situation: seen.Situation) -> None:
+        """The players Windows shows and what they play; the choice she asked about."""
+        choice = state.get("choice")
+        if isinstance(choice, library.Choice):
+            situation.question = choice.question()
+            for kind, found in choice.options.items():
+                label = f"{CHOICES.get(kind, kind)}: {found.label}"
+                situation.options.append(seen.Option(label, len(found.tracks), "Corpus"))
+        try:
+            status = self.bridge().status()
+        except BridgeError as e:
+            situation.players = None
+            situation.broken.append(f"the music players can't be reached ({e})")
+            return
+        situation.players = [
+            seen.Player(p.name, p.state, p.title, p.artist)
+            for p in sorted(status.players, key=lambda p: not p.known)
+        ]
 
     def claims(self, text: str, state: dict) -> bool:
         choice = state.get("choice")

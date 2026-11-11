@@ -184,6 +184,12 @@ class WebModule(Module):
     migrations = MIGRATIONS
     fake_chat = staticmethod(fake_chat)
     memory_note = "[from a web search]"
+    ability = "search the internet, when the user asks to or says yes to an offer to look it up"
+    examples = ["search for the weather in Porto", "look up the new Muse album"]
+
+    def observe(self, state: dict, situation) -> None:
+        if offer := state.get("offer"):
+            situation.offer = offer
 
     def __init__(self, sources: dict[str, Source] | None = None, get=fetch.get, settings=None):
         """`sources`, `get` and `settings` replace the configured ones (tests)."""
