@@ -5,10 +5,15 @@ The ones `client` returns also take `on_text`, called with each piece of the rep
 model writes it (a fake gives the whole reply as one piece).
 """
 
+import contextvars
 import os
 import sys
 
 from prada import config
+
+# Set by whoever wants the token counts of the next calls (the node's flight recorder,
+# prada.trace): a dict that `chat` fills with tokens_in / tokens_out as Ollama reports them.
+USAGE: contextvars.ContextVar[dict | None] = contextvars.ContextVar("usage", default=None)
 
 # Context window in tokens, set explicitly: Ollama's default (2048-4096) silently cuts the
 # start of a long prompt, i.e. the persona and what she remembers. Keep the prompt well under:
@@ -33,13 +38,29 @@ def chat(
     if think is not None:  # only sent when set: older models reject any think flag
         args["think"] = think
     if on_text is None:
-        return ollama.chat(**args)["message"]["content"]
+        response = ollama.chat(**args)
+        _count(response)
+        return response["message"]["content"]
     pieces = []
     for chunk in ollama.chat(**args, stream=True):
         if piece := chunk["message"]["content"]:
             pieces.append(piece)
             on_text(piece)
+        _count(chunk)  # the last chunk carries the counts
     return "".join(pieces)
+
+
+def _count(response) -> None:
+    usage = USAGE.get()
+    if usage is None:
+        return
+    for key, name in (("prompt_eval_count", "tokens_in"), ("eval_count", "tokens_out")):
+        try:
+            value = response[key]
+        except (KeyError, TypeError, AttributeError):
+            value = None
+        if value is not None:
+            usage[name] = value
 
 
 def model_name() -> str:
