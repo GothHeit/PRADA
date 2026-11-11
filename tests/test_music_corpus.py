@@ -419,7 +419,17 @@ def test_not_in_corpus_goes_to_spotify(corpus_node):
     say(node, "play Muse Space Dementia")  # Corpus plays
     reply = say(node, "play Hysteria")
     assert reply.text.startswith("Playing Hysteria by Muse on ")
+    assert reply.text.endswith(" I paused Corpus.")
     assert bridge.status().get("Corpus.Corpus").state == "paused"  # one player at a time
+
+
+def test_a_corpus_pause_that_didnt_take_is_never_claimed(corpus_node):
+    node, bridge, _, _ = corpus_node
+    say(node, "play Muse Space Dementia")  # Corpus plays
+    bridge.stuck = True
+    reply = say(node, "play Hysteria")
+    assert reply.text.startswith("Playing Hysteria by Muse on ")
+    assert "paused" not in reply.text
 
 
 def test_a_named_app_decides(corpus_node):

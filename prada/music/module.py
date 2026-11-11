@@ -35,15 +35,25 @@ from prada.music import library
 from prada.music.bridge import BridgeError, FakeBridge, Player, Status, WindowsBridge
 from prada.music.catalog import key
 from prada.music.corpus import CorpusCli, CorpusError, FakeCorpus
-from prada.music.play import Wish, fold, pick, tokens, wish
+from prada.music.play import FILLER, POLITE, Wish, fold, named_artists, pick, tokens, wish
 from prada.music.playlog import MIGRATIONS, PlayLog, Watcher
-from prada.music.spotify import FakeSpotify, Hit, Now, SpotifyApi, SpotifyError, choose, open_app
+from prada.music.spotify import (
+    FakeSpotify,
+    Hit,
+    Now,
+    Results,
+    SpotifyApi,
+    SpotifyError,
+    choose,
+    open_app,
+)
 from prada.store import open_store
 
 VERIFY = 3.0  # seconds to wait for the player to show the change
 VERIFY_STEP = 0.15
 LAUNCH = 20.0  # seconds Spotify may take to open and show up as a device
 SPOTIFY_STEP = 0.5  # seconds between looks at Spotify (each is a Web API call)
+ARTIST_LIMIT = 10  # an artist's songs searched when a title by them was misheard
 SPOTIFY_APP = "Spotify.exe"  # Spotify's app id in Windows' media controls
 PLAY_VERIFY = 12.0  # seconds for Corpus to show a song it was asked to play (it may start)
 
@@ -90,7 +100,7 @@ _COMMANDS = {
         r"quem (?:canta|ta cantando|esta cantando)(?: essa| isso| esta)?(?: musica)?",
     ],
 }
-_LEAD = r"(?:(?:hey |ok |oi )?prada |please |por favor |(?:can|could|would) you |(?:voce )?(?:pode|poderia|consegue) )*"
+_LEAD = rf"(?:{FILLER}|prada |{POLITE})*"
 _TRAIL = r"(?: (?:please|por favor|prada|for me|pra mim|now|agora|ai))*"
 _MATCHERS = [
     (verb, re.compile(rf"{_LEAD}(?:{pattern}){_TRAIL}"))
@@ -258,6 +268,24 @@ def _plays(hit: Hit, now: Now) -> bool:
     return now.playing and (same or relinked)
 
 
+def find(api, asked: Wish) -> Hit:
+    """The Spotify result to play. When nothing is close but kafka named an artist word
+    for word, their own songs are searched too ("muse space dimension": whisper heard
+    Space Dementia wrong, and Spotify's first answer was another band's song)."""
+    results = api.search(asked.query)
+    hit = pick(asked, results)
+    artists = named_artists(asked, results) if hit is None else []
+    for artist in artists[:1]:
+        more = api.search(f"artist:{artist}", limit=ARTIST_LIMIT)
+        hit = pick(asked, Results(results.hits + more.hits, results.top))
+        if hit is None:
+            rest = " ".join(w for w in fold(asked.query).split() if w not in tokens(artist))
+            raise ActionFailed(f'I couldn\'t find "{rest}" by {artist} on Spotify')
+    if hit is None:
+        raise ActionFailed(f'Spotify has nothing close to "{asked.query}"')
+    return hit
+
+
 class PlayExecutor(Executor):
     """Searches Spotify, picks the closest result, starts it on a device, then reads back
     what plays. Opens Spotify first when none of kafka's devices is open."""
@@ -272,9 +300,7 @@ class PlayExecutor(Executor):
         if not api.ready():
             raise ActionFailed("I'm not logged in to Spotify yet; run `prada music login`")
         try:
-            hit = pick(Wish(action.query, action.want), api.search(action.query))
-            if hit is None:
-                raise ActionFailed(f'Spotify has nothing close to "{action.query}"')
+            hit = find(api, Wish(action.query, action.want))
             device = choose(api.devices())
             if device is None:
                 api.open_app()
@@ -296,9 +322,8 @@ class PlayExecutor(Executor):
                 now = api.now()
         except SpotifyError as e:
             raise ActionFailed(str(e)) from e
-        if _plays(hit, now):
-            self._module.quiet_corpus()  # one player at a time
-        return {"hit": vars(hit), "now": vars(now)}
+        paused = self._module.quiet_corpus() if _plays(hit, now) else []  # one at a time
+        return {"hit": vars(hit), "now": vars(now), "paused": paused}
 
     def check(self, action: Play, result: dict, ctx: Context) -> None:
         hit, now = Hit(**result["hit"]), Now(**result["now"])
@@ -308,7 +333,10 @@ class PlayExecutor(Executor):
     def done(self, action: Play, result: dict) -> str:
         hit, now = Hit(**result["hit"]), Now(**result["now"])
         where = f" on {now.device}" if now.device else ""
-        return f"Playing {hit.describe()}{where}."
+        line = f"Playing {hit.describe()}{where}."
+        if result.get("paused"):
+            line += f" I paused {' and '.join(result['paused'])}."
+        return line
 
 
 class PlayCorpus(Action):
@@ -538,14 +566,24 @@ class MusicModule(Module):
         if self._log is not None:
             self._log.mark(app, time.time())
 
-    def quiet_corpus(self) -> None:
-        """Pauses Corpus if it plays (Spotify just started); best effort."""
+    def quiet_corpus(self) -> list[str]:
+        """Pauses Corpus if it plays (Spotify just started); best effort. ["Corpus"] once
+        Corpus shows it stopped (up to `verify`), else []: a pause is never claimed unseen."""
         try:
-            corpus = _corpus(self.bridge().status())
-            if corpus and corpus.playing:
-                self.bridge().control(corpus.app, "pause")
+            bridge = self.bridge()
+            corpus = _corpus(bridge.status())
+            if not (corpus and corpus.playing and bridge.control(corpus.app, "pause")):
+                return []
+            deadline = time.monotonic() + self.verify
+            while True:
+                now = bridge.status().get(corpus.app)
+                if now and _settled(now) and not now.playing:
+                    return [now.name]
+                if time.monotonic() >= deadline:
+                    return []
+                time.sleep(VERIFY_STEP)
         except BridgeError:
-            pass
+            return []
 
     def claims(self, text: str, state: dict) -> bool:
         choice = state.get("choice")

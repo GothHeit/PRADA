@@ -29,6 +29,8 @@ from tutor.module import TutorModule
         ("Pause the music, please.", "pause", None),
         ("stop the music", "pause", None),
         ("Prada, pause Spotify", "pause", "spotify"),
+        ("So Prada, can you pause?", "pause", None),
+        ("e aí Prada, pode pausar?", "pause", None),
         ("pausa a música no Corpus", "pause", "corpus"),
         ("play", "resume", None),
         ("resume the song", "resume", None),

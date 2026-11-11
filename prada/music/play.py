@@ -46,18 +46,31 @@ def tokens(text: str) -> set[str]:
     return {t for t in fold(text).split() if t not in _STOP} or set(fold(text).split())
 
 
+# Fillers before the request: "so Prada, can you ...", "e aí Prada, você pode ...".
+FILLER = (
+    r"so |and |then |ok |okay |alright |well |hey |hi |now |e |entao |ai |oi |ola |agora "
+    r"|bom |tipo |hm+ |uh+ "
+)
+POLITE = (
+    r"please |por favor |(?:can|could|would|will) you (?:(?:please|maybe|just) )?"
+    r"|would you mind |do you mind |(?:voce )?(?:pode|poderia|consegue|podia) (?:(?:por favor|so) )?"
+)
 _LEAD = (
-    r"(?:(?:hey |ok |oi )?prada |please |por favor |(?:can|could|would) you |"
-    r"(?:voce )?(?:pode|poderia|consegue) |(?:eu )?quero |i want (?:you )?to |lets )*"
+    rf"(?:{FILLER}|prada |{POLITE}|(?:eu )?quero |i want (?:you )?to |id like (?:you )?to "
+    r"|i wanna |lets |vamos |can i |can we |could i |could we |da pra |da para )*"
 )
 _TRAIL = r"(?: (?:please|por favor|prada|for me|pra mim|now|agora|ai|then|entao))*"
 # "play"/"toca" mean music on their own; the others only with a sign of music (`_marked`).
 _VERB = (
-    r"(?:(?P<plain>play|toca|tocar|toque)|put on|coloca|colocar|coloque|bota|botar|poe|ouvir"
-    r"|escutar|listen to|let me hear)(?P<to_play> (?:pra|para) tocar)?"
+    r"(?:(?P<plain>play|(?<=mind )playing|toca|tocar|toque)|playing|put on|putting on|coloca|colocar|coloque"
+    r"|bota|botar|poe|ouvir|escutar|listen to|hear|let me hear|let us hear)"
+    r"(?P<to_play> (?:pra|para) tocar)?(?: me| pra mim| para mim| pra gente| for me| for us)?"
 )
 _ON = r"(?: (?:on|in|from|no|na|do|pelo) (?P<app>spotify|corpus))?"
-_PLAY = re.compile(rf"{_LEAD}{_VERB} (?P<body>.+?){_ON}{_TRAIL}")
+_PLAY = re.compile(rf"(?P<lead>{_LEAD}){_VERB} (?P<body>.+?){_ON}{_TRAIL}")
+# Leads about kafka doing it ("i wanna play Minecraft", "can I play ..."): a game as often
+# as music, so they never skip the router by themselves.
+_SELF = re.compile(r"\b(?:i wanna|can i|could i|can we|could we)\b")
 # "play" followed by these isn't music.
 _NOT_MUSIC = re.compile(
     r"(?:(?:a |the |some )?(?:game|games|jogo|jogos|chess|xadrez|cards|cartas|dead|along|around"
@@ -97,6 +110,7 @@ _BY = re.compile(r"(?P<title>.+) (?:by|do|da|dos|das) (?P<by>.+)")
 # Words that only mean "music", never a mood or a name.
 _EMPTY = {
     *("it", "music", "some music", "songs", "some songs", "a song", "something", "anything"),
+    *("me", "us", "you", "mim", "you guys", "isso", "this", "that"),
     *("musica", "uma musica", "alguma musica", "musicas", "som", "um som", "algo", "alguma coisa"),
 }
 
@@ -159,7 +173,8 @@ def wish(text: str, strict: bool = False, peel: bool = True) -> Wish | None:
         return None
     found = _read(body, app)
     found.mode, found.shuffle, found.queued = mode, shuffle, rewritten
-    marked = (m["plain"] and not rewritten) or m["to_play"] or app or found.kind != "any"
+    plain = m["plain"] and not rewritten and not _SELF.search(m["lead"])
+    marked = plain or m["to_play"] or app or found.kind != "any"
     return found if marked or not strict else None
 
 
@@ -186,10 +201,56 @@ def _share(have: set[str], within: set[str]) -> float:
 
 
 ORDER = {"track": 0, "artist": 1, "album": 2, "playlist": 3}
+TITLE = 0.7  # how close the rest of the words must be to a title by an artist named exactly
+
+
+def _exact(have: set[str], within: set[str]) -> float:
+    return len(have & within) / len(have) if have else 0.0
+
+
+def named_artists(wish: Wish, results: Results) -> list[str]:
+    """Artists in the results whose whole name kafka said word for word ("Muse" in "muse
+    space dimension"), longest first, when other words were said too (a title)."""
+    said = tokens(wish.query)
+    names = {
+        h.name if h.kind == "artist" else a.strip()
+        for h in results.hits
+        for a in ([h.name] if h.kind == "artist" else h.by.split(","))
+        if h.kind in ("artist", "track", "album")
+    }
+    found = [n for n in names if (t := tokens(n)) and t <= said and t != said]
+    return sorted(found, key=lambda n: -len(tokens(n)))
+
+
+def _by_artist(wish: Wish, results: Results) -> Hit | None:
+    """A track (or album) by an artist kafka named exactly whose title is close to the rest
+    of the words: "muse space dimension" -> Space Dementia by Muse (a whisper slip)."""
+    words = fold(wish.query).split()
+    best, best_score = None, TITLE
+    for artist in named_artists(wish, results):
+        own = tokens(artist)
+        rest = " ".join(w for w in words if w not in own)
+        if not rest:
+            continue
+        for h in results.hits:
+            if h.kind not in ("track", "album") or not any(
+                tokens(a) == own for a in h.by.split(",")
+            ):
+                continue
+            if wish.kind != "any" and h.kind != wish.kind:
+                continue
+            score = SequenceMatcher(None, rest, fold(h.name)).ratio()
+            if score > best_score:
+                best, best_score = h, score
+    return best
 
 
 def pick(wish: Wish, results: Results) -> Hit | None:
-    """The result to play, or None when nothing is close enough to what kafka said."""
+    """The result to play, or None when nothing is close enough to what kafka said.
+    A result that covers everything said wins. Otherwise an artist named word for word
+    comes first, with the closest title of theirs; a near match that needs a slip in
+    most of the words ("Dimensions of Time" by "Space Museum" for "muse space dimension")
+    is never played."""
     hits = results.hits
     if wish.kind == "mood":
         return next((h for h in hits if h.kind == "playlist"), None)
@@ -197,8 +258,11 @@ def pick(wish: Wish, results: Results) -> Hit | None:
         hits = [h for h in hits if h.kind == wish.kind]
     said = tokens(wish.query)
 
+    def words(h: Hit) -> set[str]:
+        return tokens(f"{h.name} {h.by}") if h.kind != "artist" else tokens(h.name)
+
     def said_of(h: Hit) -> float:  # how much of what kafka said this result explains
-        return _share(said, tokens(f"{h.name} {h.by}") if h.kind != "artist" else tokens(h.name))
+        return _share(said, words(h))
 
     def named(h: Hit) -> float:  # how much of the result's name kafka said
         return _share(tokens(h.name), said)
@@ -212,7 +276,11 @@ def pick(wish: Wish, results: Results) -> Hit | None:
         if exact:
             return min(exact, key=lambda h: (h.kind != "artist", ORDER[h.kind]))
         return min(full, key=lambda h: ORDER[h.kind])
-    close = [h for h in hits if said_of(h) >= 0.5 and named(h) >= 0.5]
+    if found := _by_artist(wish, results):
+        return found
+    close = [
+        h for h in hits if said_of(h) >= 0.5 and named(h) >= 0.5 and _exact(said, words(h)) >= 0.5
+    ]
     if not close:
         return None
     return max(close, key=lambda h: (said_of(h) + named(h), h.kind == "track"))

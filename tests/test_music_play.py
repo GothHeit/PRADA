@@ -9,7 +9,7 @@ from prada.module import Request
 from prada.music.bridge import FakeBridge
 from prada.music.corpus import FakeCorpus
 from prada.music.module import MusicModule
-from prada.music.play import Wish, fold, pick, wish
+from prada.music.play import Wish, fold, named_artists, pick, wish
 from prada.music.spotify import (
     Device,
     FakeSpotify,
@@ -60,6 +60,15 @@ def NO_CORPUS():  # noqa: N802
         ("coloca pra tocar Evidências", "evidencias", "any", None),
         ("play Back in Black", "back in black", "any", None),
         ("play Dumb by Nirvana", "dumb nirvana", "any", None),
+        ("So Prada, can you play Muse by Space Dimension?", "muse space dimension", "any", None),
+        ("hey, could you please play Unravel?", "unravel", "any", None),
+        ("would you mind playing Hysteria", "hysteria", "any", None),
+        ("can you play me something calm", "calm", "mood", None),
+        ("I wanna hear Muse", "muse", "any", None),
+        ("could you put on Space Dementia by Muse", "space dementia muse", "any", None),
+        ("Prada, pode tocar Evidências?", "evidencias", "any", None),
+        ("e aí Prada, você pode tocar Unravel pra mim?", "unravel", "any", None),
+        ("então, toca Muse", "muse", "any", None),
     ],
 )
 def test_wishes(text, query, kind, app):
@@ -83,6 +92,11 @@ def test_wishes(text, query, kind, app):
         "play nice",
         "toca o sino",
         "coloca o alarme pra 7h",
+        "so can you play a game?",
+        "hey, can you play chess with me",
+        "can you hear me?",
+        "can you play me a song",
+        "so Prada, can you tell me about Muse?",
     ],
 )
 def test_not_wishes(text):
@@ -103,6 +117,14 @@ def test_not_wishes(text):
         "coloca Evidências do Chitãozinho e Xororó",  # this one too
         "coloca a foto do gato",
         "quero ouvir a opinião da Maria",
+        "playing tennis tomorrow",
+        "playing football later",
+        "playing with the dog",
+        "i wanna play minecraft",
+        "I wanna play Valorant",
+        "can I play Elden Ring now?",
+        "could I play outside?",
+        "can we play Monopoly tonight",
     ],
 )
 def test_everyday_verbs_skip_the_router_only_with_a_sign_of_music(text):
@@ -119,6 +141,11 @@ def test_everyday_verbs_skip_the_router_only_with_a_sign_of_music(text):
         "põe Unravel no Spotify",
         "coloca o disco Origin of Symmetry",
         "put on something calm",
+        "So Prada, can you play Muse by Space Dimension?",
+        "hey Prada, could you play Unravel?",
+        "você pode tocar Evidências?",
+        "would you mind playing Hysteria",
+        "can I hear the album Origin of Symmetry",
     ],
 )
 def test_music_requests_skip_the_router(text):
@@ -128,6 +155,8 @@ def test_music_requests_skip_the_router(text):
 
 def test_router_pick_with_an_everyday_verb_is_accepted():
     assert MusicModule().accepts("põe Unravel")
+    assert MusicModule().accepts("can I hear some Muse")
+    assert MusicModule().accepts("i wanna play Space Dementia")
 
 
 def test_fold_keeps_other_scripts():
@@ -170,6 +199,28 @@ def test_pick_by_kind_and_mood():
 def test_pick_forgives_a_small_slip_but_not_a_stranger():
     assert pick(Wish("muse space dementa"), SEARCH).name == "Space Dementia"
     assert pick(Wish("toxicity system of a down"), SEARCH) is None
+
+
+MISHEARD = hits(
+    ("track", "Dimensions of Time", "Space Museum"),
+    ("track", "Hysteria", "Muse"),
+    ("artist", "Muse", ""),
+    ("track", "Space Dementia", "Muse"),
+)
+
+
+def test_pick_a_misheard_title_by_the_artist_named():
+    # whisper heard "Space Dementia" as "Space Dimension"
+    assert pick(Wish("muse space dimension"), MISHEARD).name == "Space Dementia"
+    assert pick(Wish("space dimension muse"), MISHEARD).name == "Space Dementia"
+
+
+def test_pick_never_plays_another_band_for_a_slip():
+    stranger = hits(("track", "Dimensions of Time", "Space Museum"), ("artist", "Muse", ""))
+    assert pick(Wish("muse space dimension"), stranger) is None
+    assert named_artists(Wish("muse space dimension"), stranger) == ["Muse"]
+    # the artist's own songs, but no title close to what was said
+    assert pick(Wish("muse yellow submarine"), MISHEARD) is None
 
 
 def test_parse_results_skips_junk():
@@ -247,6 +298,37 @@ def test_nothing_close_is_never_played(play_node):
     reply = node.handle(Request(text="play Toxicity", session="s"))
     assert "nothing close" in reply.text and not reply.outcomes[0].ok
     assert spotify.played == []
+
+
+class Misheard(FakeSpotify):
+    """Spotify whose first answer to a misheard title is another band's song."""
+
+    def search(self, q: str, limit: int = 8) -> Results:
+        self.searched.append((q, limit))
+        if q.startswith("artist:"):
+            return hits(("track", "Hysteria", "Muse"), ("track", "Space Dementia", "Muse"))
+        return hits(("track", "Dimensions of Time", "Space Museum"), ("artist", "Muse", ""))
+
+
+def misheard_node(tmp_path):
+    spotify = Misheard()
+    music = MusicModule(spotify=spotify, launch=0, step=0.01, verify=0.1, corpus=NO_CORPUS())
+    return Node(modules=[music], db_path=tmp_path / "prada.db", background=False), spotify
+
+
+def test_a_misheard_title_plays_the_named_artists_song(tmp_path):
+    node, spotify = misheard_node(tmp_path)
+    reply = node.handle(Request(text="Prada, play Muse Space Dimension.", session="s"))
+    assert spotify.searched == [("muse space dimension", 8), ("artist:Muse", 10)]
+    assert spotify.played == [("spotify:track:1", "pc")]
+    assert reply.text == "Playing Space Dementia by Muse on KAFKA-PC."
+
+
+def test_a_misheard_title_with_no_close_song_asks_nothing_random(tmp_path):
+    node, spotify = misheard_node(tmp_path)
+    reply = node.handle(Request(text="play Muse Yellow Submarine", session="s"))
+    assert spotify.played == []
+    assert 'couldn\'t find "yellow submarine" by Muse' in reply.text
 
 
 def test_a_play_that_changes_nothing_is_never_claimed(tmp_path):
