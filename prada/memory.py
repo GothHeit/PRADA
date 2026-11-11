@@ -13,6 +13,10 @@ and when they said them (evidence, not her paraphrase): the quote is checked aga
 they really said, or the fact is dropped. A fact that corrects an older one supersedes it;
 the old one is kept, marked, so she can still say what they used to think.
 
+When they tell her she got a word wrong (she misheard "velvet" as "Valve"), `correct` fixes
+it in place, right away: in the facts, and in the messages and summaries of the last few
+conversations. That is not a change of mind, so nothing of the wrong word is kept.
+
 `recall` searches everything stored, turns, summaries and facts, for what the user just said,
 by keyword (prada.search) and by meaning (prada.vectors), merges both rankings (reciprocal
 rank fusion) and returns the few best she hasn't been given yet, said the way a person
@@ -22,6 +26,7 @@ remembers: "About three months ago, one morning, you told me ...".
 import json
 import re
 import sqlite3
+import sys
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -90,6 +95,77 @@ RECALL_FETCH = 24  # candidates read from the index before the ones she already 
 RRF_K = 60  # reciprocal rank fusion: a hit's score is the sum of 1 / (RRF_K + rank)
 KNOWN_FACTS = 20  # facts the summarizer sees, so it can correct one instead of repeating it
 MIN_QUOTE = 3  # characters a quote must have to count as evidence
+FIX_EPISODES = 3  # newest conversations whose messages, summaries and facts a fix rewrites
+FIX_RECENT = 20  # messages of the conversation going on where the wrong word must be
+FIX_MAX = 10  # a fix that would change more rows than this changes nothing
+# Words too common to be what she misheard (English and Portuguese).
+_SMALL_WORDS = set(
+    "a an and are but can for from had has her him his how its not now one our out she the "
+    "they this was who why you yes your me my it is i to of in on at so it's that "
+    "com das dos ela ele era isso mas não nao que sim uma você voce é e o os as de do da "
+    "eu me meu minha".split()
+)
+# Their message says she got something wrong (not that they changed their mind).
+_CUE = re.compile(
+    r"\b(?:mis-?heard|mis-?understood|heard (?:it |that |me |my \w+ )?wrong"
+    r"|understood (?:it |that |me )?wrong|got (?:it|that|my \w+) wrong"
+    r"|ouviu errado|entendeu errado|escutou errado|errou|se enganou)\b",
+    re.IGNORECASE,
+)
+
+
+# "velvet, not valve" / "not valve, velvet" (English and Portuguese), found in their message
+# by code, so a fix never depends on the model noticing it.
+_W = r"[^\W\d_][\w'-]*"
+_NOT = r"(?:and\s+|e\s+)?(?:not|n[aã]o)"
+_X_NOT_Y = re.compile(rf"((?:{_W}\s+){{0,2}}{_W})\s*,?\s+{_NOT}\s+({_W}(?:\s+{_W}){{0,2}})", re.I)
+_NOT_Y_X = re.compile(
+    rf"(?:^|[,.;!?]\s*){_NOT}\s+({_W}(?:\s+{_W}){{0,2}})\s*,\s*({_W}(?:\s+{_W}){{0,2}})", re.I
+)
+# A change of mind or of their life is not her mistake ("Miso now, not Mochi").
+_CHANGED = re.compile(
+    r"\b(?:anymore|any more|no longer|now|changed my mind|these days|instead"
+    r"|não mais|nao mais|agora|mudei|hoje em dia|em vez)\b",
+    re.I,
+)
+
+
+def corrections(said: str) -> list[tuple[str, str]]:
+    """(wrong, right) pairs their message states as a correction, best first: "it's velvet,
+    not valve" or "not valve, velvet" (with "não" too); [] when it says something changed
+    ("Miso now, not Mochi"). Shared words at either end are dropped, so "Toru Kitajima, not
+    Toro Kitajima" gives ("Toro", "Toru"). `Memory.correct` still checks each one."""
+    if _CHANGED.search(said):
+        return []
+    pairs = [(m[2], m[1]) for m in _X_NOT_Y.finditer(said)]
+    pairs += [(m[1], m[2]) for m in _NOT_Y_X.finditer(said)]
+    found = []
+    for wrong, right in pairs:
+        w, r = wrong.split(), right.split()
+        while r and r[-1].casefold() in ("and", "e"):  # "veludo e não Valve"
+            r = r[:-1]
+        for n in (3, 2, 1):  # the most words that still differ only in the middle
+            a, b = w[:n], r[-n:]
+            if n > 1 and (len(a) < n or len(b) < n):
+                continue
+            same = a[-1].casefold() == b[-1].casefold() or a[0].casefold() == b[0].casefold()
+            if n > 1 and not same:
+                continue
+            while len(a) > 1 and len(b) > 1 and a[-1].casefold() == b[-1].casefold():
+                a, b = a[:-1], b[:-1]
+            while len(a) > 1 and len(b) > 1 and a[0].casefold() == b[0].casefold():
+                a, b = a[1:], b[1:]
+            pair = (" ".join(a), " ".join(b))
+            if _CUE.search(pair[1]) or set(_words(pair[1]).split()) <= _SMALL_WORDS:
+                break  # "not valve, you misheard me": no right word in it
+            found.append(pair)
+            break
+    return list(dict.fromkeys(found))
+
+
+class TooBroad(Exception):
+    """A fix would change too many rows to be what she misheard: nothing was changed."""
+
 
 _TASK = (
     "You are writing down what you want to remember of a conversation you just had with the "
@@ -307,6 +383,187 @@ class Memory:
                     )
                 if model != "fake":
                     self.index.add_fact(new, text, quote)
+
+    def correct(self, wrong: str, right: str, said: str, manual: bool = False) -> int:
+        """They told her `wrong` was a mistake (a word she misheard or got wrong) and it is
+        `right`: replace it, as a whole word and ignoring case, in the messages, summaries
+        and facts of the newest `FIX_EPISODES` conversations. A text that has both words
+        (their correction, her "velvet, not Valve") is about the mistake and stays.
+
+        Guards, since a fix can't be undone: `said` (their correcting message) must contain
+        `right` (evidence, as for facts) and say she misheard (`_CUE`: "misheard", "ouviu errado";
+        or "I said <right>", not after "like"/"as"/"como"; "tea, not coffee" alone is a preference, and a change of mind is not
+        a mistake); `wrong` must be in what she was given this turn (`_given`), and not only
+        small words. `manual` (the `prada memory`
+        tool) skips those two. Returns how many rows changed, 0 when none did; raises
+        `TooBroad` (nothing changed) when more than `FIX_MAX` would. Each old text goes to
+        stderr, so a bad fix can be undone by hand."""
+        wrong, right = clean(wrong), clean(right)
+        if len(_words(wrong)) < MIN_QUOTE or not right or _words(wrong) == _words(right):
+            return 0
+        if set(_words(wrong).split()) <= _SMALL_WORDS:
+            return 0
+        if f" {_words(right)} " not in f" {_words(said)} ":
+            return 0  # not their words: she would be correcting them with her own guess
+        pattern, has_right = _pattern(wrong), _pattern(right)
+        if not manual:
+            if _CHANGED.search(said):
+                return 0  # their life or mind changed: the summarizer supersedes, keeping both
+            # "I said velvet" is a cue only with the right word right after it, and never
+            # in "like I said, I prefer tea" (a preference said again).
+            said_it = re.search(
+                rf"(?<!\blike )(?<!\bas )(?<!\bcomo )\b(?:i said|eu disse),?\s+{has_right.pattern}",
+                said,
+                re.IGNORECASE,
+            )
+            if not (_CUE.search(said) or said_it):
+                return 0  # "I prefer tea, not coffee" is a preference, not her mistake
+            if not self._given(pattern, said):
+                return 0
+
+        def fix(text: str) -> str:
+            if has_right.search(text):  # "velvet, not Valve": about the mistake, kept
+                return text
+            return pattern.sub(lambda _: right, text)  # `right` as-is, never a template
+
+        episodes = [
+            r[0]
+            for r in self.db.execute(
+                "SELECT id FROM memory_episode ORDER BY id DESC LIMIT ?", (FIX_EPISODES,)
+            )
+        ]
+        if not episodes:
+            return 0
+        marks = ",".join("?" * len(episodes))
+        changes = []  # (kind, row, new values)
+        for f in self.db.execute(
+            f"SELECT id, fact, quote, model FROM memory_fact WHERE superseded_by IS NULL "
+            f"AND episode IN ({marks})",
+            episodes,
+        ).fetchall():
+            if (new := (fix(f["fact"]), fix(f["quote"]))) != (f["fact"], f["quote"]):
+                changes.append(("fact", f, new))
+        for t in self.db.execute(
+            f"SELECT id, content FROM memory_turn WHERE episode IN ({marks})", episodes
+        ).fetchall():
+            if (new := fix(t["content"])) != t["content"]:
+                changes.append(("turn", t, new))
+        for e in self.db.execute(
+            f"SELECT id, summary, model FROM memory_episode WHERE id IN ({marks}) "
+            "AND summary != ''",
+            episodes,
+        ).fetchall():
+            if (new := fix(e["summary"])) != e["summary"]:
+                changes.append(("summary", e, new))
+        if len(changes) > FIX_MAX:
+            raise TooBroad(f"{wrong!r} is in {len(changes)} places")
+        with self.db:
+            for kind, row, new in changes:
+                if kind == "fact":
+                    self._set_fact(row["id"], *new, row["model"])
+                    old = f"{row['fact']} / {row['quote']}"
+                elif kind == "turn":
+                    self.db.execute(
+                        "UPDATE memory_turn SET content = ? WHERE id = ?", (new, row["id"])
+                    )
+                    self.index.replace_turn(row["id"], new)
+                    self.vectors.forget("turn", row["id"])
+                    old = row["content"]
+                else:
+                    self.db.execute(
+                        "UPDATE memory_episode SET summary = ? WHERE id = ?", (new, row["id"])
+                    )
+                    if row["model"] != "fake":
+                        self.index.add_summary(row["id"], new)
+                    self.vectors.forget("summary", row["id"])
+                    old = row["summary"]
+                print(f"memory: fixed {kind} {row['id']}, it was: {old}", file=sys.stderr)
+        return len(changes)
+
+    def _given(self, pattern: re.Pattern, said: str) -> bool:
+        """`pattern` is in what she had in front of her this turn: the conversation going
+        on, the summaries and tail she remembers, or what searching for `said` finds."""
+        texts = [t["content"] for t in self.recent(FIX_RECENT)]
+        if any(pattern.search(t) for t in texts):
+            return True
+        return bool(pattern.search(self.remembered()) or pattern.search(self.recall(said)))
+
+    def _set_fact(self, fact: int, text: str, quote: str, model: str) -> None:
+        """Rewrite a fact and its search entries. Call inside the caller's transaction."""
+        self.db.execute(
+            "UPDATE memory_fact SET fact = ?, quote = ? WHERE id = ?", (text, quote, fact)
+        )
+        self.index.forget_fact(fact)
+        if model != "fake":
+            self.index.add_fact(fact, text, quote)
+        self.vectors.forget("fact", fact)
+
+    def edit_fact(self, fact: int, text: str) -> bool:
+        """Change what a fact says (the `prada memory` tool); its quote stays. False if
+        there is no such fact."""
+        text = " ".join(text.split())
+        row = self.db.execute(
+            "SELECT quote, model FROM memory_fact WHERE id = ?", (fact,)
+        ).fetchone()
+        if row is None or not text:
+            return False
+        with self.db:
+            self._set_fact(fact, text, row["quote"], row["model"])
+        return True
+
+    def forget_fact(self, fact: int) -> list[int]:
+        """Delete a fact and the older versions it replaced (the `prada memory` tool), so
+        no trace of it is found again. Returns the ids deleted ([] if there is no such fact)."""
+        if self.db.execute("SELECT 1 FROM memory_fact WHERE id = ?", (fact,)).fetchone() is None:
+            return []
+        gone, todo = [], [fact]
+        while todo and len(gone) < 1000:  # bounded in case of a cycle
+            ref = todo.pop()
+            if ref in gone:
+                continue
+            gone.append(ref)
+            todo += [
+                r[0]
+                for r in self.db.execute(
+                    "SELECT id FROM memory_fact WHERE superseded_by = ?", (ref,)
+                )
+            ]
+        with self.db:
+            for ref in gone:
+                self.db.execute("DELETE FROM memory_fact WHERE id = ?", (ref,))
+                self.index.forget_fact(ref)
+                self.vectors.forget("fact", ref)
+        return gone
+
+    def find(self, text: str, limit: int = 20) -> list[tuple[str, sqlite3.Row]]:
+        """Facts, summaries and messages containing `text` (ignoring case), newest first
+        within each kind, for the `prada memory` tool: ("fact" | "summary" | "turn", row)."""
+        like = f"%{text}%"
+        found = [
+            ("fact", r)
+            for r in self.db.execute(
+                "SELECT * FROM memory_fact WHERE fact LIKE ? OR quote LIKE ? ORDER BY id DESC "
+                "LIMIT ?",
+                (like, like, limit),
+            )
+        ]
+        found += [
+            ("summary", r)
+            for r in self.db.execute(
+                "SELECT id, started AS ts, summary FROM memory_episode WHERE summary LIKE ? "
+                "ORDER BY id DESC LIMIT ?",
+                (like, limit),
+            )
+        ]
+        found += [
+            ("turn", r)
+            for r in self.db.execute(
+                "SELECT id, episode, ts, role, content FROM memory_turn WHERE content LIKE ? "
+                "ORDER BY id DESC LIMIT ?",
+                (like, limit),
+            )
+        ]
+        return found
 
     def facts(self) -> list[sqlite3.Row]:
         """Every fact kept, oldest first (superseded ones too)."""
@@ -542,6 +799,19 @@ _CJK = re.compile("[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff66-\
 
 def _words(text: str) -> str:
     return " ".join(re.findall(r"\w+", plain(text.casefold())))
+
+
+def clean(text: str) -> str:
+    """A word as the model gave it: spacing normalized, quotes and end punctuation off."""
+    return " ".join(text.split()).strip(" \"'\u201c\u201d\u2018\u2019.,!?;:")
+
+
+def _pattern(word: str) -> re.Pattern:
+    """`word` as a whole word (or phrase, any spacing), ignoring case."""
+    body = r"\s+".join(re.escape(w) for w in word.split())
+    if _CJK.search(word):
+        return re.compile(body, re.IGNORECASE)
+    return re.compile(rf"(?<!\w){body}(?!\w)", re.IGNORECASE)
 
 
 def _quoted(quote: str, said: list[sqlite3.Row]) -> sqlite3.Row | None:

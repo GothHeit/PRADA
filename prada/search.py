@@ -184,6 +184,11 @@ class KeywordIndex:
                 (fact, fold(f"{text} {quote}")),
             )
 
+    def forget_fact(self, fact: int) -> None:
+        """A fact was rewritten or deleted. Call inside the caller's transaction."""
+        if self.available:
+            self.db.execute("DELETE FROM memory_fact_fts WHERE rowid = ?", (fact,))
+
     def search(self, query: str, limit: int) -> list[Hit]:
         """Best `limit` matches for the terms of `query`: most distinct terms first, then
         terms in the hit's own text, then bm25 (a turn's topic weighs `TOPIC_WEIGHT`). Anything

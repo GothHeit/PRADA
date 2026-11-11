@@ -48,6 +48,9 @@ class Reply(BaseModel):
     # A message she offered to look up online; a plain yes next searches it (the node
     # hands it to the web module). Never sent to clients.
     offer: str = Field("", exclude=True)
+    # (wrong, right): they said she got a word wrong; the node fixes her memory
+    # (`Memory.correct`) and only then says so. Never sent to clients.
+    correction: tuple[str, str] | None = Field(None, exclude=True)
 
 
 @dataclass
@@ -85,6 +88,9 @@ class Module:
     # Put before her reply in the conversation memory when one of the module's actions ran,
     # so later turns and summaries know where it came from (e.g. "[from a web search]").
     memory_note: ClassVar[str] = ""
+    # True = when they say she got a word wrong ("velvet, not valve") the node fixes her
+    # memory after this module answers (prada.memory.Memory.correct).
+    fixes_memory: ClassVar[bool] = False
 
     def claims(self, text: str, state: dict) -> bool:
         """True when `text` plainly continues a conversation with this module, so the router

@@ -25,7 +25,9 @@ def oracle(cases):
             if title == "Answer":
                 says = case.says[0] if case and case.says else "I can't do that from here"
                 offer = bool(case and case.offer)
-                return json.dumps({"reply": f"Hmm, {says}.", "offer_search": offer})
+                # No wrong/right: a correction must be caught from their words by code.
+                answer = {"reply": f"Hmm, {says}.", "offer_search": offer}
+                return json.dumps(answer)
             return fake(messages=messages, schema=schema)
 
         return chat
@@ -39,6 +41,7 @@ def test_evalset_is_well_formed():
     assert all(c.module in names for c in CASES if c.module)
     assert any(c.offer for c in CASES) and any(c.offer is False for c in CASES)
     assert any(c.memory for c in CASES) and any(c.before for c in CASES)
+    assert any(c.fixes for c in CASES) and any(c.fixes is False for c in CASES)
 
 
 def test_oracle_passes_every_case():

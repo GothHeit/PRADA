@@ -46,7 +46,13 @@ _SYSTEM = persona.system_prompt(
     "what you kept of one, each with roughly when. Use them only if they help, speak of them "
     "the way a person remembers (when it was, what they said), and never add details they "
     "don't contain. When one says it changed what they had said before, the newer one is "
-    "true now. If they don't answer the question, you don't remember it."
+    "true now. If they don't answer the question, you don't remember it. "
+    "When they tell you that a word or name you heard, remember or said is wrong (you "
+    "misheard them, or got a name wrong), fill wrong with the wrong word exactly as it "
+    "appears above and right with the right one in their words; your memory is then fixed "
+    "and they are told, so never say yourself that you fixed, updated or saved anything. "
+    "Leave both empty for anything else, including when they changed their mind or "
+    "something about them changed."
 )
 
 
@@ -72,6 +78,10 @@ class Answer(BaseModel):
     offer_search: bool = Field(
         False, description="True only if the reply offers to look something up online"
     )
+    wrong: str = Field(
+        "", description="Only when they say you got a word wrong: that word as it appears above"
+    )
+    right: str = Field("", description="The right word, in their words; empty if wrong is")
 
 
 class _Gate:
@@ -103,6 +113,7 @@ class AssistantModule(Module):
         "is not language practice and not turning on the PC."
     )
     fake_chat = staticmethod(fake_chat)
+    fixes_memory = True
 
     def handle(self, request: Request, ctx: Context) -> Reply:
         # The system prompt stays the same text all conversation long (what she remembers
@@ -142,12 +153,13 @@ class AssistantModule(Module):
             answer = self._answer(retry, ctx, _Gate(None))
             if answer is None or claims_action(answer.reply):
                 return Reply(module=self.name, text=persona.cant_do())
+        fix = (answer.wrong, answer.right) if answer.wrong and answer.right else None
         if not answer.offer_search:
-            return Reply(module=self.name, text=answer.reply)
+            return Reply(module=self.name, text=answer.reply, correction=fix)
         # A yes to her offer searches what they asked (their words, not hers): the node
         # hands the message to the web module.
         text = answer.reply if "?" in answer.reply else f"{answer.reply} {persona.want_search()}"
-        return Reply(module=self.name, text=text.strip(), offer=request.text)
+        return Reply(module=self.name, text=text.strip(), offer=request.text, correction=fix)
 
     def _answer(self, messages, ctx: Context, gate: "_Gate") -> Answer | None:
         """The model's answer, or None if it came out broken (e.g. just "{") or empty.

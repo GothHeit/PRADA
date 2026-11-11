@@ -53,6 +53,9 @@ class Case:
     summarize: bool = False
     offer: bool | None = None  # must (True) or must not (False) offer to search
     says: list[str] = field(default_factory=list)  # the reply has one of these words
+    # They correct a word she got wrong: True = her memory must be fixed, False = must not
+    # change (a change of mind is not a mistake). None = not checked.
+    fixes: bool | None = None
 
 
 @dataclass
@@ -106,6 +109,8 @@ def check(case: Case, reply: Reply) -> str:
         return "claimed an action that didn't run"
     if case.offer is not None and offered(reply) != case.offer:
         return "offered to search a known fact" if not case.offer else "didn't offer to search"
+    if case.fixes is not None and bool(reply.data.get("fixed")) != case.fixes:
+        return "didn't fix her memory" if case.fixes else "changed her memory for no mistake"
     if case.says and not any(_mentions(reply.text, w) for w in case.says):
         return f"didn't say {' / '.join(case.says)}"
     return ""

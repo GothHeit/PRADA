@@ -185,3 +185,13 @@ def cant_do() -> str:
 def lost_words() -> str:
     """When the model's answer came out broken twice: nothing happened, she asks again."""
     return "Sorry, I lost my words for a second. Could you say that again?"
+
+
+def corrected(wrong: str, right: str) -> str:
+    """Said after her memory really was fixed (prada.memory.Memory.correct), never before."""
+    return f"I fixed it in my memory: {right}, not {wrong}."
+
+
+def not_corrected(wrong: str) -> str:
+    """When a fix would have changed too much of her memory: nothing was changed."""
+    return f'I couldn\'t fix that in my memory, "{wrong}" is in too many places, so I left it.'

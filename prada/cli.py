@@ -58,6 +58,24 @@ def main(argv: list[str] | None = None) -> int:
     music_sub.add_parser("spotify", help="show the Spotify login, devices and what plays")
     music_sub.add_parser("import", help="read the music catalog from Corpus now")
 
+    mem = sub.add_parser(
+        "memory", help="developer tool: read and fix what she remembers (facts by default)"
+    )
+    mem.add_argument("--all", action="store_true", help="also list facts that were replaced")
+    mem_sub = mem.add_subparsers(dest="memory_command")
+    find = mem_sub.add_parser("search", help="facts, summaries and messages containing TEXT")
+    find.add_argument("text")
+    edit = mem_sub.add_parser("edit", help="change what fact ID says (its quote stays)")
+    edit.add_argument("id", type=int)
+    edit.add_argument("text")
+    forget = mem_sub.add_parser("forget", help="delete fact ID and the versions it replaced")
+    forget.add_argument("id", type=int)
+    fix = mem_sub.add_parser(
+        "fix", help="replace a misheard word in the last few conversations, as by voice"
+    )
+    fix.add_argument("wrong")
+    fix.add_argument("right")
+
     persona = sub.add_parser("persona", help="show who PRADA is and where her persona file is")
     persona_sub = persona.add_subparsers(dest="persona_command")
     init = persona_sub.add_parser("init", help="write a persona file to edit (outside the repo)")
@@ -126,6 +144,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"PRADA node up at {url} (modules: {', '.join(modules)})")
     elif args.command == "voice":
         return _voice(args)
+    elif args.command == "memory":
+        return _memory(args)
     elif args.command == "persona":
         return _persona(args)
     elif args.command == "eval" and args.compare:
@@ -223,6 +243,71 @@ def _music_import() -> int:
         return 1
     print(f"Read {songs} songs from Corpus.")
     return 0
+
+
+def _memory(args) -> int:
+    """`prada memory`: a developer's window into her memory (the node may be running)."""
+    import sqlite3
+
+    from prada.memory import MIGRATIONS, Memory
+    from prada.store import open_store
+
+    try:
+        memory = Memory(open_store("memory", MIGRATIONS))
+    except (sqlite3.Error, OSError, RuntimeError) as e:
+        print(f"prada: can't open her memory ({e})", file=sys.stderr)
+        return 1
+    command = args.memory_command
+    if command == "search":
+        found = memory.find(args.text)
+        for kind, r in found:
+            if kind == "fact":
+                print(_fact_line(r))
+            elif kind == "summary":
+                print(f"summary {r['id']} ({_date(r['ts'])}): {r['summary']}")
+            else:
+                print(f"message {r['id']} ({_date(r['ts'])}, {r['role']}): {r['content']}")
+        if not found:
+            print(f"Nothing in her memory contains {args.text!r}.")
+    elif command == "edit":
+        if not memory.edit_fact(args.id, args.text):
+            print(f"prada: no fact {args.id}", file=sys.stderr)
+            return 1
+        print(f"Fact {args.id} now says: {' '.join(args.text.split())}")
+    elif command == "forget":
+        gone = memory.forget_fact(args.id)
+        if not gone:
+            print(f"prada: no fact {args.id}", file=sys.stderr)
+            return 1
+        print(f"Forgot fact {', '.join(map(str, gone))}.")
+    elif command == "fix":
+        from prada.memory import TooBroad
+
+        try:
+            fixed = memory.correct(args.wrong, args.right, args.right, manual=True)
+        except TooBroad as e:
+            print(f"prada: nothing changed, {e} (use search and edit)", file=sys.stderr)
+            return 1
+        print(f"Fixed {fixed} place(s): {args.right} instead of {args.wrong}.")
+    else:
+        facts = [f for f in memory.facts() if args.all or f["superseded_by"] is None]
+        for f in facts:
+            print(_fact_line(f))
+        if not facts:
+            print("She keeps no facts yet.")
+    return 0
+
+
+def _date(ts: float) -> str:
+    import time
+
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+
+
+def _fact_line(f) -> str:
+    old = f" (replaced by {f['superseded_by']})" if f["superseded_by"] is not None else ""
+    fake = " [fake]" if f["model"] == "fake" else ""
+    return f'fact {f["id"]} ({_date(f["ts"])}){old}{fake}: {f["fact"]} — "{f["quote"]}"'
 
 
 def _persona(args) -> int:

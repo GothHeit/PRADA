@@ -28,7 +28,7 @@ from prada import actionlog, actions, llm, persona, router, status, vectors
 from prada.actionlog import MIGRATIONS as LOG_MIGRATIONS
 from prada.actionlog import ActionLog
 from prada.actions import Risk
-from prada.memory import EPISODE_GAP, Memory, summarize
+from prada.memory import EPISODE_GAP, Memory, TooBroad, clean, corrections, summarize
 from prada.memory import MIGRATIONS as MEMORY_MIGRATIONS
 from prada.memory import fake_chat as memory_fake_chat
 from prada.module import Chat, Context, Cut, Module, Reply, Request
@@ -157,6 +157,7 @@ class Node:
                     module, module.handle(request, ctx), ctx, request.session, session
                 )
                 session["current"] = self._hand_offer(name, reply, session)
+                reply = self._correct(memory, request.text, reply)
                 self._remember(memory, request.text, reply)
                 return reply
             except Exception as e:
@@ -329,6 +330,32 @@ class Node:
                 db = open_store("actionlog", LOG_MIGRATIONS, ":memory:")
             self._log = ActionLog(db, self._clock)
         return self._log
+
+    def _correct(self, memory: Memory, said: str, reply: Reply) -> Reply:
+        """They told her she got a word wrong: fix her memory before this turn is stored,
+        and say so only if something really changed (`data["fixed"]` = rows changed). The
+        correction is read from their message by code first ("velvet, not valve"); the
+        model's `Reply.correction` is only tried after that. Modules that don't
+        `fixes_memory` (the tutor, whose "allée, not allé" is a lesson) never fix it."""
+        module = self.modules.get(reply.module)
+        if reply.error or module is None or not module.fixes_memory:
+            return reply
+        pairs = corrections(said) + ([reply.correction] if reply.correction else [])
+        for wrong, right in dict.fromkeys(pairs):
+            try:
+                fixed = memory.correct(wrong, right, said)
+            except TooBroad as e:
+                print(f"memory: did not fix it, {e}", file=sys.stderr)
+                text = f"{reply.text} {persona.not_corrected(clean(wrong))}".strip()
+                return reply.model_copy(update={"text": text})
+            except sqlite3.Error as e:
+                print(f"memory: could not fix {wrong!r} ({e})", file=sys.stderr)
+                continue
+            if fixed:
+                text = f"{reply.text} {persona.corrected(clean(wrong), clean(right))}".strip()
+                data = {**reply.data, "fixed": fixed}
+                return reply.model_copy(update={"text": text, "data": data})
+        return reply
 
     def _remember(self, memory: Memory, said: str, reply: Reply) -> None:
         if reply.error or not reply.text:
