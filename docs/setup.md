@@ -116,6 +116,14 @@ max_pages = 3                         # results she may read per question (0-3)
 sources = ["web", "reddit", "github"] # the ones she may use
 ```
 
+## Music controls
+
+She pauses, resumes and skips whatever plays in Spotify, Corpus or any other player that shows up in Windows' media controls (the overlay with the volume keys), and says what's playing. Plain commands skip the model, in English or Portuguese: "pause", "next song", "go back a song", "what's playing?", "pausa", "próxima", "que música é essa?"; add "on Spotify" / "no Corpus" to pick a player. She says it happened only after the player shows the change.
+
+The node reaches Windows through WSL interop: it keeps one `powershell.exe` running with a small script (`prada/music/bridge.ps1`, run inline, so the execution policy doesn't matter). Nothing to install or configure. `prada music` prints what Windows sees, to check the bridge.
+
+While `prada node` runs, every track Spotify and Corpus play is logged in her database (table `music_play`: title, artist, album, seconds listened, finished / skipped / stopped, and whether she started it), for learning your taste later. It stays on this computer.
+
 ## Wake the PC from another machine
 
 The `wake` module (say "wake up the PC" in `prada chat`) and `prada wake` send a Wake-on-LAN magic packet (standard library only) from any machine on your LAN. Enable Wake-on-LAN in the PC's BIOS and network adapter, and prefer a wired connection.

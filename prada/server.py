@@ -127,6 +127,7 @@ def serve(port: int, node: Node | None = None) -> None:
     node = node or Node()
     brain = "fake" if llm.fake_enabled() else llm.model_name()  # a bad [llm] table fails here
     with make_server(node, port) as server:
+        node.start()
         modules = ", ".join(node.modules)
         print(f"PRADA node on http://{HOST}:{server.server_port} ({modules}; brain {brain})")
         try:

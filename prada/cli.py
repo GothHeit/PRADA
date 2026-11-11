@@ -50,6 +50,8 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--steps", type=int, help="training steps (default 50000)")
     train.add_argument("--out", help="folder or .onnx path for the model (default: voice models)")
 
+    sub.add_parser("music", help="show what Windows' media controls see (Spotify, Corpus, ...)")
+
     persona = sub.add_parser("persona", help="show who PRADA is and where her persona file is")
     persona_sub = persona.add_subparsers(dest="persona_command")
     init = persona_sub.add_parser("init", help="write a persona file to edit (outside the repo)")
@@ -124,6 +126,8 @@ def main(argv: list[str] | None = None) -> int:
         from prada.eval import compare
 
         return compare(args.compare)
+    elif args.command == "music":
+        return _music()
     elif args.command == "eval" and args.suite == "assistant":
         from prada.eval import run as run_assistant_eval
 
@@ -140,6 +144,30 @@ def main(argv: list[str] | None = None) -> int:
         from tutor.cli import run
 
         return run(args.lang or "ru")
+    return 0
+
+
+def _music() -> int:
+    from prada import llm
+    from prada.music.bridge import BridgeError, FakeBridge, WindowsBridge
+
+    bridge = FakeBridge() if llm.fake_enabled() else WindowsBridge()
+    try:
+        status = bridge.status()
+    except BridgeError as e:
+        print(f"prada: {e}", file=sys.stderr)
+        return 1
+    finally:
+        if isinstance(bridge, WindowsBridge):
+            bridge.close()
+    if not status.players:
+        print("No player is showing anything to Windows.")
+    for p in status.players:
+        mark = "*" if p.app == status.current else " "
+        where = f"{p.position:.0f}/{p.duration:.0f} s" if p.duration else "no timeline"
+        print(
+            f"{mark} {p.name} [{p.app}] {p.state}: {p.describe()} ({p.album or 'no album'}; {where})"
+        )
     return 0
 
 

@@ -103,5 +103,10 @@ class Module:
         Not asked when the request names the module."""
         return True
 
+    def start(self, db_path) -> None:
+        """Called once when a long-running node starts (`prada node`), for background work
+        such as watching the music players; `db_path` is the node's store (None = default).
+        Never called for an in-process chat, an eval or a test node."""
+
     def handle(self, request: Request, ctx: Context) -> Reply:
         raise NotImplementedError

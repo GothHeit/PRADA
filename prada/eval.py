@@ -131,11 +131,17 @@ class Counter:
 
 
 def eval_modules():
-    """The node's modules, with web searches answered by canned offline sources."""
+    """The node's modules, with web searches answered by canned offline sources and the
+    music players faked (an eval never presses kafka's real pause button)."""
+    from prada.music.bridge import FakeBridge
+    from prada.music.module import MusicModule
     from prada.web.module import FakeSource, WebModule
 
-    web = WebModule(sources={name: FakeSource(name) for name in config.WEB_SOURCES})
-    return [web if m.name == "web" else m for m in default_modules()]
+    fakes = {
+        "web": WebModule(sources={name: FakeSource(name) for name in config.WEB_SOURCES}),
+        "music": MusicModule(bridge=FakeBridge()),
+    }
+    return [fakes.get(m.name, m) for m in default_modules()]
 
 
 def _seed(path: Path, memory: list[list[str]]) -> None:

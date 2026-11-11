@@ -63,12 +63,20 @@ class Pending:
 def default_modules() -> list[Module]:
     """The built-in modules; the first (the assistant) is the router's fallback."""
     from prada.assistant import AssistantModule
+    from prada.music.module import MusicModule
     from prada.notes import NotesModule
     from prada.wake import WakeModule
     from prada.web.module import WebModule
     from tutor.module import TutorModule
 
-    return [AssistantModule(), TutorModule(), WakeModule(), NotesModule(), WebModule()]
+    return [
+        AssistantModule(),
+        TutorModule(),
+        WakeModule(),
+        NotesModule(),
+        WebModule(),
+        MusicModule(),
+    ]
 
 
 class Node:
@@ -98,6 +106,15 @@ class Node:
         self._sessions: OrderedDict[str, dict] = OrderedDict()
         self._lock = threading.Lock()
         self._speak: Speak | None = None  # the current request's, while it is handled
+
+    def start(self) -> None:
+        """Start the modules' background work for a long-running node (the music play
+        log); a failing module only prints why."""
+        for module in self.modules.values():
+            try:
+                module.start(self._db_path)
+            except Exception as e:
+                print(f"{module.name}: background work not started ({e})", file=sys.stderr)
 
     def handle(
         self,
