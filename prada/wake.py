@@ -65,7 +65,7 @@ class WakeModule(Module):
     ability = "turn on the user's PC (it can only turn it on)"
     examples = ["wake up the PC"]
 
-    def observe(self, state: dict, situation) -> None:
+    def observe(self, state: dict, situation, current: bool) -> None:
         try:
             config.wake_settings(None, None, None)
         except ValueError:

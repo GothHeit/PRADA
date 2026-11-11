@@ -183,6 +183,7 @@ class Watcher:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._error = ""  # the last failure printed, so a closed Windows isn't said every time
+        self.last: tuple[float, Status | None] = (0.0, None)  # (when, the last good look)
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, name="music-watch", daemon=True)
@@ -201,8 +202,15 @@ class Watcher:
             self._error = str(e)
             return RETRY
         self._error = ""
-        self._log.see(status, self._clock())
+        now = self._clock()
+        self.last = (now, status)
+        self._log.see(status, now)
         return POLL
+
+    @property
+    def error(self) -> str:
+        """Why the last look failed ("" if it didn't)."""
+        return self._error
 
     def _run(self) -> None:
         while not self._stop.is_set():

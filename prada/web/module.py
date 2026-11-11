@@ -187,8 +187,8 @@ class WebModule(Module):
     ability = "search the internet, when the user asks to or says yes to an offer to look it up"
     examples = ["search for the weather in Porto", "look up the new Muse album"]
 
-    def observe(self, state: dict, situation) -> None:
-        if offer := state.get("offer"):
+    def observe(self, state: dict, situation, current: bool) -> None:
+        if current and (offer := state.get("offer")):
             situation.offer = offer
 
     def __init__(self, sources: dict[str, Source] | None = None, get=fetch.get, settings=None):

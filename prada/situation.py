@@ -33,6 +33,15 @@ class Source(BaseModel):
     )
 
 
+SHORT = 80  # longest error text kept in a `broken` line
+
+
+def short(error) -> str:
+    """An error's text, cut to `SHORT` characters, for a `broken` line."""
+    text = " ".join(str(error).split()) or type(error).__name__
+    return text if len(text) <= SHORT else text[: SHORT - 3].rstrip() + "..."
+
+
 UNSURE = 0.5  # ears less sure of the language than this: the words may be misheard
 
 

@@ -37,7 +37,7 @@ from prada.music.bridge import BridgeError, FakeBridge, Player, Status, WindowsB
 from prada.music.catalog import key
 from prada.music.corpus import CorpusCli, CorpusError, FakeCorpus
 from prada.music.play import FILLER, POLITE, Wish, fold, named_artists, pick, tokens, wish
-from prada.music.playlog import MIGRATIONS, PlayLog, Watcher, favorites
+from prada.music.playlog import MIGRATIONS, POLL, PlayLog, Watcher, favorites
 from prada.music.spotify import (
     FakeSpotify,
     Hit,
@@ -59,6 +59,7 @@ SPOTIFY_APP = "Spotify.exe"  # Spotify's app id in Windows' media controls
 FAVORITES = 25  # most played tracks whose names go to her ears
 FAVORITE_DAYS = 90  # ... over this many days
 EAR_WORDS = 80  # music names offered to her ears at most
+FRESH = 3 * POLL  # seconds the watcher's last look at the players stays good for her
 PLAY_VERIFY = 12.0  # seconds for Corpus to show a song it was asked to play (it may start)
 
 # Matched on lower-case text without accents or punctuation (see `_norm`).
@@ -540,6 +541,7 @@ class MusicModule(Module):
         self.launch = launch
         self.step = step
         self._log: PlayLog | None = None
+        self._watcher: Watcher | None = None
         self.executors = [
             PauseExecutor(self),
             ResumeExecutor(self),
@@ -587,7 +589,8 @@ class MusicModule(Module):
         if self._bridge is None and not llm.fake_enabled():
             bridge = self.bridge()
             self._log = PlayLog(open_store(self.name, MIGRATIONS, db_path))
-            Watcher(bridge.status, self._log).start()
+            self._watcher = Watcher(bridge.status, self._log)
+            self._watcher.start()
         if self._corpus is None and not llm.fake_enabled():
             self.library().path = db_path
             self.library().catalog()  # a first read in the background
@@ -615,20 +618,30 @@ class MusicModule(Module):
         except BridgeError:
             return []
 
-    def observe(self, state: dict, situation: seen.Situation) -> None:
-        """The players Windows shows and what they play; the choice she asked about."""
+    def observe(self, state: dict, situation: seen.Situation, current: bool) -> None:
+        """The players Windows shows and what they play (the watcher's last look while the
+        node runs, so a hung bridge never holds a turn); the choice she asked about, while
+        it can still be answered."""
         choice = state.get("choice")
-        if isinstance(choice, library.Choice):
+        if current and isinstance(choice, library.Choice):
             situation.question = choice.question()
             for kind, found in choice.options.items():
                 label = f"{CHOICES.get(kind, kind)}: {found.label}"
                 situation.options.append(seen.Option(label, len(found.tracks), "Corpus"))
-        try:
-            status = self.bridge().status()
-        except BridgeError as e:
-            situation.players = None
-            situation.broken.append(f"the music players can't be reached ({e})")
-            return
+        if self._watcher is not None:
+            seen_at, status = self._watcher.last
+            if status is None or time.time() - seen_at > FRESH:
+                why = self._watcher.error or "no answer"
+                situation.players = None
+                situation.broken.append(f"the music players can't be read ({seen.short(why)})")
+                return
+        else:
+            try:
+                status = self.bridge().status()
+            except BridgeError as e:
+                situation.players = None
+                situation.broken.append(f"the music players can't be reached ({seen.short(e)})")
+                return
         situation.players = [
             seen.Player(p.name, p.state, p.title, p.artist)
             for p in sorted(status.players, key=lambda p: not p.known)

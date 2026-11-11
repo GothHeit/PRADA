@@ -130,11 +130,13 @@ class Module:
         the voice client for whisper's prompt, so keep it quick and never call the model."""
         return []
 
-    def observe(self, state: dict, situation: Situation) -> None:
+    def observe(self, state: dict, situation: Situation, current: bool) -> None:
         """The module's state provider: add what it knows right now to this turn's
         `situation` (its players, a question it is waiting on, a line under `broken` for what
-        isn't working). `state` is its state for the session (read-only here). Asked before
-        every turn, so keep it quick and never call the model."""
+        isn't working, which also leaves its `ability` out). `state` is its state for the
+        session (read-only here); `current` = the conversation is with this module, so a
+        question it asked can still be answered. Asked every turn, under the node's lock:
+        keep it quick (no slow calls, never the model)."""
 
     def handle(self, request: Request, ctx: Context) -> Reply:
         raise NotImplementedError

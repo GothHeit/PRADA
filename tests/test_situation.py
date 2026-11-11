@@ -88,7 +88,7 @@ def test_a_failing_state_provider_is_said_not_raised(tmp_path):
         name = "broken"
         description = "x"
 
-        def observe(self, state, s):
+        def observe(self, state, s, current):
             raise RuntimeError("oops")
 
     node = Node([MusicModule(bridge=Down()), Broken()], db_path=":memory:", background=False)
@@ -195,3 +195,79 @@ def test_typed_requests_say_so(monkeypatch):
     spy = Spy()
     client.repl(spy)
     assert spy.sources[0].via == "typed"
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 1_800_000_000.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_a_held_question_that_expired_is_shown_as_ended(tmp_path, monkeypatch):
+    monkeypatch.setenv("PRADA_WAKE_MAC", "aa:bb:cc:dd:ee:ff")
+    clock, statuses = _Clock(), []
+
+    class Chat(AssistantModule):
+        def handle(self, request, ctx):
+            statuses.append(ctx.status)
+            return Reply(module=self.name, text="ok")
+
+    node = Node([Chat(), WakeModule()], db_path=tmp_path / "p.db", clock=clock, background=False)
+    node.handle(Request(text="wake up the PC", module="wake", session="s"))
+    assert node.situation("s").confirm  # fresh: still waiting
+    clock.now += 65
+    assert node.situation("s").confirm == []  # too late to answer now
+    node.handle(Request(text="yes sure go ahead and do that now", session="s"))
+    text = "\n".join(statuses[-1])
+    assert "Waiting for a yes or no" not in text
+    assert "What PRADA did" in text  # how the held wake ended, from her log
+
+
+def test_music_state_comes_from_the_watcher_while_the_node_runs():
+    class Hung(FakeBridge):
+        calls = 0
+
+        def status(self):
+            Hung.calls += 1
+            raise AssertionError("observe must not ask the bridge while a watcher runs")
+
+    class Watching:
+        error = ""
+
+        def __init__(self, at, status):
+            self.last = (at, status)
+
+    import time
+
+    music = MusicModule(bridge=Hung())
+    music._watcher = Watching(time.time(), FakeBridge().status())
+    s = Situation(0, players=None)
+    music.observe({}, s, False)
+    assert [p.app for p in s.players] == ["Spotify", "Corpus"] and Hung.calls == 0
+    music._watcher = Watching(time.time() - 60, FakeBridge().status())
+    music._watcher.error = "x" * 300
+    s = Situation(0, players=None)
+    music.observe({}, s, False)
+    assert s.players is None and len(s.broken[0]) < 130 and s.broken[0].endswith("...)")
+
+
+def test_a_choice_shows_only_while_it_can_be_answered():
+    from prada.music.library import Choice, Found
+
+    choice = Choice("Wave", {"song": Found("Wave", "song", [], False)})
+    s = Situation(0)
+    MusicModule().observe({"choice": choice}, s, True)
+    assert s.question and len(s.options) == 1
+    s = Situation(0)
+    MusicModule().observe({"choice": choice}, s, False)
+    assert not s.question and not s.options
+
+
+def test_a_broken_module_offers_no_ability(tmp_path, monkeypatch):
+    monkeypatch.delenv("PRADA_WAKE_MAC", raising=False)
+    monkeypatch.setenv("PRADA_CONFIG", str(tmp_path / "none.toml"))
+    node = Node([AssistantModule(), WakeModule()], db_path=":memory:", background=False)
+    s = node.situation(None)
+    assert s.broken and "wake" not in {a.name for a in s.abilities}

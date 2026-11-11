@@ -171,11 +171,14 @@ class Node:
                 session.pop("_trusted", None)  # a new conversation confirms again
             session["_seen"] = now
             memory = self._mem()
+            reply = self._answer(request, session, memory)
+            # Built once a held question is settled, so it never shows one that this very
+            # message answered or let expire (the action log has how it ended).
             self._now = self._situation(request, session, memory)
             if self._turn is not None:
                 # what she can do is the same every turn: the trace keeps the rest
                 self._turn.situation = seen.render(replace(self._now, abilities=[]))
-            if (reply := self._answer(request, session, memory)) is not None:
+            if reply is not None:
                 self._remember(memory, request.text, reply)
                 return reply
             if name is None:
@@ -302,14 +305,18 @@ class Node:
             now, players=None, last_talk=last, first_talk=last is None, source=request.source
         )
         for module in self.modules.values():
+            broken = len(s.broken)
             try:
-                module.observe(dict(session.get(module.name, {})), s)
+                current = session.get("current") == module.name
+                module.observe(dict(session.get(module.name, {})), s, current)
             except Exception as e:
                 print(f"{module.name}: no situation ({e})", file=sys.stderr)
-                s.broken.append(f"{module.name}: can't tell its state ({e})")
-            if module.ability:
+                s.broken.append(f"{module.name}: can't tell its state ({seen.short(e)})")
+            # an ability that is broken right now is only listed as broken, never offered
+            if module.ability and len(s.broken) == broken:
                 s.abilities.append(seen.Ability(module.name, module.ability, module.examples))
-        if (held := self._pending.get(request.session)) and held.module in self.modules:
+        held = self._pending.get(request.session)
+        if held and held.module in self.modules and now - held.asked_at <= PENDING_TTL:
             executors = {actions.kind_of(e.action): e for e in self.modules[held.module].executors}
             s.confirm = [executors[a.kind].ask(a) for a in held.held if a.kind in executors]
         try:
