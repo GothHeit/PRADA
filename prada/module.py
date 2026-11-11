@@ -114,5 +114,11 @@ class Module:
         such as watching the music players; `db_path` is the node's store (None = default).
         Never called for an in-process chat, an eval or a test node."""
 
+    def vocabulary(self, db) -> list[str]:
+        """Names its requests often hold that speech recognition may not know (artists,
+        songs), most useful first; `db` is the module's store (None if it has none). Read by
+        the voice client for whisper's prompt, so keep it quick and never call the model."""
+        return []
+
     def handle(self, request: Request, ctx: Context) -> Reply:
         raise NotImplementedError

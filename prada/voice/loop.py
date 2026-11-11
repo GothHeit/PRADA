@@ -31,6 +31,9 @@ FRAME_SECONDS = FRAME / SAMPLE_RATE
 MIN_SPEECH_RMS = 300.0  # int16 loudness below which nothing counts as speech
 VERBOSE = False  # `prada voice --verbose`: say what the ears and mouth are doing on stderr
 
+PROMPT_CHARS = 600  # whisper's prompt, at most (it keeps only its last 224 tokens)
+SURE = 0.5  # with language "auto", a guess this likely is taken; else the last turn's language
+
 # What PRADA says when the request never got an answer.
 CANT_REACH = "Hmm, I can't reach my thoughts right now. Is my node running?"
 WENT_WRONG = "Sorry, something went wrong on my side. Could you try again?"
@@ -64,6 +67,79 @@ def phrase(wake_word: str) -> str:
     ("hey_jarvis_v0.1" and paths to .onnx files too)."""
     name = Path(wake_word).name.removesuffix(".onnx").removesuffix(".tflite")
     return " ".join(re.sub(r"_v\d.*$", "", name).replace("_", " ").replace("-", " ").split())
+
+
+def whisper_prompt(words, extra: str = "", budget: int = PROMPT_CHARS) -> str:
+    """Whisper's prompt: `words` (most useful first) as a comma list within `budget`
+    characters, most useful last (nearest the speech, and kept if whisper cuts the prompt),
+    then `extra` (`[voice] whisper_prompt`, always kept)."""
+    extra = " ".join(extra.split())
+    used, chosen, seen = len(extra), [], set()
+    for word in words:
+        word = " ".join(word.split())
+        if not word or word.casefold() in seen or used + len(word) + 2 > budget:
+            continue
+        seen.add(word.casefold())
+        chosen.append(word)
+        used += len(word) + 2
+    glossary = ", ".join(reversed(chosen))
+    return " ".join(p for p in (f"{glossary}." if glossary else "", extra) if p)
+
+
+class Hints:
+    """What whisper reads before each request: the wake phrases, the names the node gathers
+    (`session.vocabulary()`: her name, names in her memory, music you play) and the manual
+    `extra`. The node's list is asked for in the background, so the ears never wait on the
+    node between the wake word and your words: each prompt uses the list from the ask
+    before (the first one is asked for when the ears start). When the node can't be reached
+    the last list is kept."""
+
+    def __init__(self, session, wake_words=(), extra: str = "", budget: int = PROMPT_CHARS):
+        self.session = session
+        self.phrases = [phrase(w).title() for w in wake_words]
+        self.extra = extra
+        self.budget = budget
+        self.words: list[str] = []
+        self.asking: threading.Thread | None = None  # the ask in flight, if any
+
+    def refresh(self) -> None:
+        """Ask the node for its list again, in the background (unless an ask is in flight)."""
+        if self.asking is not None and self.asking.is_alive():
+            return
+        self.asking = threading.Thread(target=self._ask, daemon=True)
+        self.asking.start()
+
+    def _ask(self) -> None:
+        try:
+            self.words = self.session.vocabulary()
+        except NodeError as e:
+            debug(f"vocabulary: {e}")
+
+    def prompt(self) -> str:
+        words = self.words
+        self.refresh()
+        return whisper_prompt(self.phrases + words, self.extra, self.budget)
+
+
+def _fold(text: str) -> str:
+    return " ".join(re.sub(r"[^\w]+", " ", text.casefold()).split())
+
+
+def echoes(text: str, prompt: str) -> bool:
+    """Whether `text` is only names from whisper's `prompt` read back as a list ("Muse,
+    Monika."): what whisper writes when it hears noise but no words. One name alone is
+    kept, since it may answer "which one?"."""
+    parts = [_fold(part) for part in re.split(r"[,、，]", text)]
+    parts = [part for part in parts if part]
+    known = f" {_fold(prompt)} "
+    return len(parts) >= 2 and all(f" {part} " in known for part in parts)
+
+
+def pick_language(guess: str, likely: float, last: str | None) -> str:
+    """The language to transcribe in when it is "auto": whisper's `guess` when it is sure
+    enough (`likely` >= SURE), else the last request's language; short requests are often
+    misjudged ("play Muse" taken for Dutch)."""
+    return guess if likely >= SURE or last is None else last
 
 
 class Barge:

@@ -49,9 +49,9 @@ Settings go in `[voice]` of the config file (on Windows, `%USERPROFILE%\.config\
 [voice]
 wake_words = ["hey_jarvis", "~/prada/wake_up_prada.onnx"]  # pretrained names or your own .onnx models
 threshold = 0.5             # wake word score that counts as heard
-whisper_model = "small"     # whisper.cpp model name (multilingual) or path to a ggml .bin
+whisper_model = "large-v3-turbo"  # whisper.cpp model name (multilingual) or path to a ggml .bin
 language = "auto"           # or "en", "ru", ...
-whisper_prompt = "Kitajima, Monika"  # names whisper should spell right
+whisper_prompt = "Kitajima"  # extra words whisper should spell right (see Names she hears)
 tts = "piper"               # who speaks: "piper", "kokoro" or "qwen" (see Her voice)
 speed = 1.0                 # speaking speed for Piper and Kokoro (0.5-2)
 piper_voice = "en_US-amy-medium"
@@ -70,6 +70,12 @@ Kafka = "Kahfka"
 ```
 
 Write Windows paths in single quotes (`'C:\Users\you\wake_up_prada.onnx'`): in double quotes TOML reads `\U` as an escape. Any number of wake words listen at once. The pretrained ones are `alexa`, `hey_jarvis`, `hey_mycroft` and `hey_rhasspy`. "Wake Up Prada" needs its own model (see [Your own wake words](#your-own-wake-words)). Models live in `<data dir>/voice` (`%USERPROFILE%\.local\share\prada\voice` on Windows); a bare name in `wake_words` is a model there if `<name>.onnx` exists, else a pretrained one. With `PRADA_FAKE_LLM=1`, `prada voice` reads requests from stdin and prints the replies, so it runs without audio or models.
+
+### Names she hears
+
+Whisper spells unusual names as common words ("Velvet" heard as "Valve"), so before each request it reads a short list of the names you are likely to say. `prada voice` asks the node for it in the background (`GET /v1/vocabulary`), so the list a request uses is the one fetched after the request before: her own name, names in what she remembers about you (newest first), the artists and songs you played most in the last 90 days, then the artists with the most songs in your Corpus catalog (PRADA's stored copy; Corpus itself is not asked). The wake phrases and your `whisper_prompt` are added on the voice side; your `whisper_prompt` always stays in, and the list is cut to about 600 characters. The node gathers it again every 5 minutes.
+
+`large-v3-turbo` (the default, about 1.6 GB of memory) mishears much less than `small` (about 0.5 GB) but takes longer per request; `prada voice setup` downloads it once. If it is too slow or memory is short, set `whisper_model = "small"`. With `language = "auto"`, a short request whisper isn't sure about is heard in the language of your last request. When whisper hears sound but no words, or only reads the list of names back, she chimes and listens once more. `prada voice --verbose` shows the language guess, the time whisper took and what it heard.
 
 ### Her voice
 

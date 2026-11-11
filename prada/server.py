@@ -1,6 +1,7 @@
 """The home node's transport: HTTP + JSON on localhost, standard library only.
 
     GET  /health      -> {"status": "ok", "modules": [...]}
+    GET  /v1/vocabulary -> {"words": [...]}: names her ears should know (Node.vocabulary)
     POST /v1/request  -> body: Request JSON, response: Reply JSON
     POST /v1/stream   -> body: Request JSON, response: NDJSON lines, sent as they happen:
                          {"say": text, "kind": "part"|"filler"} ... then {"reply": Reply JSON}
@@ -42,6 +43,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._host_ok():
             return
+        if self.path == "/v1/vocabulary":
+            return self._send(200, {"words": self.node.vocabulary()})
         if self.path != "/health":
             return self._send(404, {"error": "not found"})
         self._send(200, {"status": "ok", "modules": list(self.node.modules)})

@@ -9,6 +9,7 @@ touches the network.
 import re
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from prada.config import VoiceSettings
@@ -19,7 +20,10 @@ from prada.voice.loop import (
     SAMPLE_RATE,
     Barge,
     Endpointer,
+    Hints,
     debug,
+    echoes,
+    pick_language,
     respell,
     split_by_language,
     track_noise,
@@ -112,7 +116,9 @@ def rms(frame) -> float:
 class MicEars:
     """Listens on the microphone: wake words with openWakeWord, then whisper.cpp."""
 
-    def __init__(self, s: VoiceSettings):
+    def __init__(self, s: VoiceSettings, hints: Hints | None = None):
+        """`hints` gives whisper's prompt before each request (else `[voice] whisper_prompt`
+        alone)."""
         import sounddevice as sd
         from openwakeword.model import Model as WakeModel
         from pywhispercpp.model import Model as WhisperModel
@@ -121,15 +127,17 @@ class MicEars:
         self.threshold = s.threshold
         self.silence = s.silence
         self.language = s.language
+        self.last_language: str | None = None  # of the last request, for language "auto"
+        self.hints = hints
+        self.prompt = s.whisper_prompt
+        self.cue: Callable[[], None] | None = None  # sounds before listening again
         self.wake = WakeModel(
             wakeword_models=[_wake_model(w) for w in s.wake_words], inference_framework="onnx"
         )
-        hint = {"initial_prompt": s.whisper_prompt} if s.whisper_prompt else {}
         self.stt = WhisperModel(
             str(_whisper_model(s.whisper_model)),
             redirect_whispercpp_logs_to=None,
             print_progress=False,
-            **hint,
         )
         self.stream = sd.RawInputStream(
             samplerate=SAMPLE_RATE,
@@ -193,8 +201,9 @@ class MicEars:
         if not self.stream.active:
             self.stream.start()
         # Drop what was captured during the chime, so it isn't taken for speech.
-        if waiting := self.stream.read_available:
-            self.stream.read(waiting)
+        self._drop_waiting()
+        if self.hints is not None:
+            self.prompt = self.hints.prompt()
         if wait is not None:  # right after she spoke: let the room's echo of her voice die out
             for _ in range(round(SETTLE / FRAME_SECONDS)):
                 self.stream.read(FRAME)
@@ -202,15 +211,24 @@ class MicEars:
             heard, text = self._hear(wait)
             if text or not heard:
                 break
-            # Speech whisper made no words of: say so and listen again (the mic kept
-            # running meanwhile, so nothing said since is lost).
+            # Speech whisper made no words of: say so and listen again. The mic kept
+            # running meanwhile, but its buffer holds well under a second of what was said
+            # during the transcription, so the cue asks for it again.
             again = tries < RETRIES
             print(
                 f"voice: heard something but no words{'; listening again' if again else ''}",
                 file=sys.stderr,
             )
+            if again and self.cue is not None:
+                self.cue()
+                self._drop_waiting()
         self.stream.stop()  # deaf while thinking and speaking
         return text
+
+    def _drop_waiting(self) -> None:
+        """Drop what the mic captured meanwhile (e.g. the chime), so it isn't taken for speech."""
+        if waiting := self.stream.read_available:
+            self.stream.read(waiting)
 
     def _hear(self, wait: float | None) -> tuple[bool, str]:
         """Record one request; (whether there was speech, its words)."""
@@ -236,11 +254,28 @@ class MicEars:
         audio = np.concatenate(frames).astype(np.float32) / 32768
         from pywhispercpp.utils import redirect_stderr
 
+        start = time.monotonic()
         with redirect_stderr(to=None):  # whisper.cpp logs every language detection
-            segments = self.stt.transcribe(audio, language=self.language)
+            language, guessed = self._language(audio)
+            segments = self.stt.transcribe(audio, language=language, initial_prompt=self.prompt)
         raw = " ".join(segment.text for segment in segments)
-        debug(f"whisper: {raw.strip()!r}")
-        return True, clean_transcript(raw)
+        if guessed:
+            debug(f"language: {guessed} -> {language}")
+        debug(f"whisper ({language}, {time.monotonic() - start:.1f} s): {raw.strip()!r}")
+        text = clean_transcript(raw)
+        if text and echoes(text, self.prompt):
+            debug("whisper read its prompt back: no words")
+            text = ""
+        if text:
+            self.last_language = language
+        return True, text
+
+    def _language(self, audio) -> tuple[str, str]:
+        """The language to transcribe in, and whisper's guess ("" when it is set)."""
+        if self.language != "auto":
+            return self.language, ""
+        (guess, likely), _ = self.stt.auto_detect_language(audio)
+        return pick_language(guess, float(likely), self.last_language), f"{guess} {likely:.2f}"
 
     def close(self) -> None:
         self.stream.close()
@@ -348,8 +383,15 @@ class SpeakerMouth:
         self.speaker.close()
 
 
-def build(s: VoiceSettings) -> tuple[MicEars, SpeakerMouth]:
-    return MicEars(s), SpeakerMouth(s)
+def build(s: VoiceSettings, session=None) -> tuple[MicEars, SpeakerMouth]:
+    """The ears and mouth; with a `session`, whisper's prompt holds the names the node
+    gathers (`Hints`)."""
+    hints = Hints(session, s.wake_words, s.whisper_prompt) if session is not None else None
+    if hints is not None:
+        hints.refresh()  # the first request's names are asked for while the ears load
+    ears, mouth = MicEars(s, hints), SpeakerMouth(s)
+    ears.cue = mouth.chime  # whisper made no words of it: she chimes and listens again
+    return ears, mouth
 
 
 def try_voice(s: VoiceSettings, lines: list[str] | None = None) -> None:

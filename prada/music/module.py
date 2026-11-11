@@ -28,7 +28,7 @@ import time
 import unicodedata
 from typing import ClassVar, Literal
 
-from prada import llm
+from prada import llm, vocabulary
 from prada.actions import Action, ActionFailed, Executor
 from prada.module import Context, Module, Reply, Request
 from prada.music import library
@@ -36,7 +36,7 @@ from prada.music.bridge import BridgeError, FakeBridge, Player, Status, WindowsB
 from prada.music.catalog import key
 from prada.music.corpus import CorpusCli, CorpusError, FakeCorpus
 from prada.music.play import FILLER, POLITE, Wish, fold, named_artists, pick, tokens, wish
-from prada.music.playlog import MIGRATIONS, PlayLog, Watcher
+from prada.music.playlog import MIGRATIONS, PlayLog, Watcher, favorites
 from prada.music.spotify import (
     FakeSpotify,
     Hit,
@@ -55,6 +55,9 @@ LAUNCH = 20.0  # seconds Spotify may take to open and show up as a device
 SPOTIFY_STEP = 0.5  # seconds between looks at Spotify (each is a Web API call)
 ARTIST_LIMIT = 10  # an artist's songs searched when a title by them was misheard
 SPOTIFY_APP = "Spotify.exe"  # Spotify's app id in Windows' media controls
+FAVORITES = 25  # most played tracks whose names go to her ears
+FAVORITE_DAYS = 90  # ... over this many days
+EAR_WORDS = 80  # music names offered to her ears at most
 PLAY_VERIFY = 12.0  # seconds for Corpus to show a song it was asked to play (it may start)
 
 # Matched on lower-case text without accents or punctuation (see `_norm`).
@@ -107,6 +110,13 @@ _MATCHERS = [
     for verb, patterns in _COMMANDS.items()
     for pattern in patterns
 ]
+
+
+def _bare_title(title: str) -> str:
+    """A title without its version notes: "Space Dementia - Remastered (2011)" -> "Space
+    Dementia"."""
+    bare = re.sub(r"\s*[(\[][^)\]]*[)\]]|\s+-\s.*$", "", title).strip()
+    return bare or title
 
 
 def _norm(text: str) -> str:
@@ -550,6 +560,17 @@ class MusicModule(Module):
         if self._library is None:
             self._library = library.Library(self.corpus())
         return self._library
+
+    def vocabulary(self, db) -> list[str]:
+        """What you play most (any app, from the play log), then the artists with the most
+        songs in Corpus' catalog (PRADA's stored copy; Corpus itself is not asked)."""
+        words: list[str] = []
+        if db is not None:
+            for row in favorites(db, time.time() - FAVORITE_DAYS * 86400, FAVORITES):
+                words += [row["artist"], _bare_title(row["title"])]
+        catalog = self.library().open()
+        catalog.sync()
+        return vocabulary.unique(words + catalog.artists(), EAR_WORDS)
 
     def start(self, db_path) -> None:
         """Log what plays and read the Corpus catalog while the node runs (real players

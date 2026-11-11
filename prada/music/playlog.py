@@ -47,6 +47,15 @@ def _iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def favorites(db, since: float, limit: int) -> list:
+    """The tracks listened to most since `since` (rows with `title`, `artist`), any app."""
+    return db.execute(
+        "SELECT title, artist FROM music_play WHERE started_at >= ?"
+        " GROUP BY lower(title), lower(artist) ORDER BY SUM(seconds) DESC LIMIT ?",
+        (_iso(since), limit),
+    ).fetchall()
+
+
 @dataclass
 class _Open:
     row: int

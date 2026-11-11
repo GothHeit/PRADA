@@ -423,7 +423,7 @@ def _voice(args) -> int:
             return _design(args)
         # Always the node: the voice side (e.g. Windows) has no model of its own.
         session = client.RemoteSession(client.node_url(args.port))
-        ears, mouth = devices.build(settings)
+        ears, mouth = devices.build(settings, session)
     except ImportError as e:
         tts = "qwen" if args.voice_command == "design" else settings.tts
         extra = "voice" if tts == "piper" else f"voice,{tts}"

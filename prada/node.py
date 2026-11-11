@@ -27,7 +27,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from prada import actionlog, actions, llm, persona, router, status, trace, vectors
+from prada import actionlog, actions, llm, persona, router, status, trace, vectors, vocabulary
 from prada.actionlog import MIGRATIONS as LOG_MIGRATIONS
 from prada.actionlog import ActionLog
 from prada.actions import Risk
@@ -45,6 +45,7 @@ EMBED_BATCH = 32  # texts embedded per model call
 OFFER_MODULE = "web"  # takes a module's offer to look something up (`Reply.offer`)
 MAX_TURNS = 20  # messages of the current conversation given to a module
 PENDING_TTL = 60  # seconds a question about a risky action stays open
+VOCABULARY_AGE = 5 * 60  # seconds the words for her ears are kept before gathered again
 SHORT_ANSWER_WORDS = 4  # a reply this short to a held question is never routed as chat
 
 
@@ -115,6 +116,7 @@ class Node:
         self._speak: Speak | None = None  # the current request's, while it is handled
         self._trace: Trace | None = None
         self._turn: Turn | None = None  # the current request's record, while it is handled
+        self._words: tuple[float, list[str]] | None = None  # (when, words) for her ears
 
     def start(self) -> None:
         """Start the modules' background work for a long-running node (the music play
@@ -202,6 +204,36 @@ class Node:
                 db = open_store("trace", trace.MIGRATIONS, ":memory:")
             self._trace = Trace(db, self._clock)
         return self._trace
+
+    def vocabulary(self) -> list[str]:
+        """Names her ears should know, most useful first: her own name, names in what she
+        remembers of you, then each module's (`Module.vocabulary`). Gathered again every
+        `VOCABULARY_AGE` seconds; while a request holds the node the last list is given, so
+        the ears never wait for her to finish thinking."""
+        now = self._clock()
+        if self._words and now - self._words[0] < VOCABULARY_AGE:
+            return self._words[1]
+        if not self._lock.acquire(blocking=False):
+            return self._words[1] if self._words else []
+        try:
+            words: list[str] = []
+            try:
+                words.append(persona.load().name)
+            except ValueError:
+                pass
+            try:
+                words += vocabulary.memory_names(self._mem().facts())
+            except sqlite3.Error as e:
+                print(f"memory: no names for her ears ({e})", file=sys.stderr)
+            for module in self.modules.values():
+                try:
+                    words += module.vocabulary(self._db(module))
+                except Exception as e:
+                    print(f"{module.name}: no names for her ears ({e})", file=sys.stderr)
+            self._words = (now, vocabulary.unique(words))
+            return self._words[1]
+        finally:
+            self._lock.release()
 
     def cut(self, cut: Cut) -> bool:
         """A voice client stopped her mid-reply: memory keeps only what was heard. False if

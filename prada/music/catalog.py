@@ -228,6 +228,12 @@ class Catalog:
         with self._lock:
             return list(self._tracks)
 
+    def artists(self) -> list[str]:
+        """Artists as tagged, the ones with the most songs first."""
+        with self._lock:
+            ranked = sorted(self._artists.values(), key=len, reverse=True)
+            return [tracks[0].artist for tracks in ranked]
+
     def by_genre(self, words: list[str]) -> list[Track]:
         """Tracks whose genre holds any of `words` as whole words ("rock" in "J-Rock")."""
         wanted = [f" {key(w)} " for w in words if key(w)]

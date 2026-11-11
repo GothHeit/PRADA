@@ -354,7 +354,9 @@ def test_respell_swaps_whole_words_in_any_case():
     assert loop.respell("abc", {"": "x"}) == "abc"
 
 
-def test_speech_without_words_is_reported_and_heard_again(monkeypatch, capsys):
+def _fake_mic_ears(monkeypatch, *texts, language="en", guesses=()):
+    """MicEars on a fake mic (a short burst of speech, then quiet) and a fake whisper that
+    says `texts` in turn and guesses languages `guesses` ((code, likelihood) in turn)."""
     np = pytest.importorskip("numpy")
     import contextlib
     import sys
@@ -385,19 +387,103 @@ def test_speech_without_words_is_reported_and_heard_again(monkeypatch, capsys):
             return np.full(n, 3000 if loud else 0, dtype=np.int16).tobytes(), False
 
     class Whisper:
-        def __init__(self, *texts):
-            self.texts = list(texts)
+        def __init__(self):
+            self.texts, self.guesses, self.calls = list(texts), list(guesses), []
 
-        def transcribe(self, audio, language=None):
+        def transcribe(self, audio, language=None, initial_prompt=None):
+            self.calls.append((language, initial_prompt))
             return [types.SimpleNamespace(text=self.texts.pop(0))]
 
+        def auto_detect_language(self, audio):
+            return self.guesses.pop(0), {}
+
     ears = devices.MicEars.__new__(devices.MicEars)
-    ears.stream, ears.noise, ears.silence, ears.language = Stream(), 100.0, 0.8, "en"
-    ears.stt = Whisper("[BLANK_AUDIO]", "what time is it")
+    ears.stream, ears.noise, ears.silence, ears.language = Stream(), 100.0, 0.8, language
+    ears.stt, ears.hints, ears.prompt, ears.cue, ears.last_language = (
+        Whisper(),
+        None,
+        "",
+        None,
+        None,
+    )
+    return ears
+
+
+def test_speech_without_words_is_reported_and_heard_again(monkeypatch, capsys):
+    ears = _fake_mic_ears(monkeypatch, "[BLANK_AUDIO]", "what time is it")
+    cues = []
+    ears.cue = lambda: cues.append("chime")
     assert ears.listen(6.0) == "what time is it"
     assert "heard something but no words; listening again" in capsys.readouterr().err
+    assert cues == ["chime"]  # she lets you know she didn't get it
 
-    ears.stt = Whisper("", "(music)")
+    ears = _fake_mic_ears(monkeypatch, "", "(music)")
     assert ears.listen() == ""
     err = capsys.readouterr().err
     assert err.count("heard something but no words") == 2 and not ears.stream.active
+
+
+def test_whisper_reads_the_hints_before_each_request(monkeypatch):
+    class Node:
+        def __init__(self):
+            self.words = ["Monika", "Muse"]
+
+        def vocabulary(self):
+            if self.words is None:
+                raise NodeError("node down")
+            return self.words
+
+    node = Node()
+    ears = _fake_mic_ears(monkeypatch, "play space dementia", "again", "once more")
+    ears.hints = loop.Hints(node, ["hey_jarvis"], "Kitajima")
+    ears.hints.refresh()  # as the ears start
+    ears.hints.asking.join()
+    ears.listen()
+    assert ears.stt.calls[-1] == ("en", "Muse, Monika, Hey Jarvis. Kitajima")
+    ears.hints.asking.join()  # asked again in the background, used by the next request
+    node.words = ["Ana"]
+    ears.listen()
+    assert ears.stt.calls[-1][1] == "Muse, Monika, Hey Jarvis. Kitajima"  # never waits
+    ears.hints.asking.join()
+    node.words = None
+    ears.listen()
+    assert ears.stt.calls[-1][1] == "Ana, Hey Jarvis. Kitajima"
+    ears.hints.asking.join()
+    assert ears.hints.words == ["Ana"]  # node down: the last list is kept
+
+
+def test_whisper_reading_its_prompt_back_is_no_words(monkeypatch):
+    ears = _fake_mic_ears(monkeypatch, "Muse, Toru Kitajima, Monika.", "Space Dementia",
+                          "Monika, Hey Jarvis", "Muse, Monika", "play Muse, then Monika")  # fmt: skip
+    ears.prompt = "Space Dementia, Muse, Toru Kitajima, Monika, Hey Jarvis. Kitajima"
+    assert ears.listen() == "Space Dementia"  # an echo is heard again; one name is an answer
+    assert ears.listen() == ""  # echoes only: no request
+    assert ears.listen() == "play Muse, then Monika"
+    assert not loop.echoes("Muse", ears.prompt)
+    assert loop.echoes("muse,  MONIKA", ears.prompt)
+
+
+def test_auto_language_falls_back_to_the_last_one_when_unsure(monkeypatch):
+    guesses = [("en", 0.9), ("nl", 0.3), ("ru", 0.8)]
+    ears = _fake_mic_ears(monkeypatch, "hello", "play muse", "привет", language="auto",
+                          guesses=guesses)  # fmt: skip
+    for _ in guesses:
+        ears.listen()
+    assert [lang for lang, _ in ears.stt.calls] == ["en", "en", "ru"]
+    assert ears.last_language == "ru"
+
+
+def test_auto_language_takes_the_guess_with_no_last_one():
+    assert loop.pick_language("nl", 0.2, None) == "nl"
+    assert loop.pick_language("nl", 0.2, "pt") == "pt"
+    assert loop.pick_language("ja", 0.7, "pt") == "ja"
+
+
+def test_whisper_prompt_keeps_the_most_useful_names_within_budget():
+    words = ["Prada", "Monika", "prada", "  ", "Toru  Kitajima", "A" * 30]
+    assert loop.whisper_prompt(words) == f"{'A' * 30}, Toru Kitajima, Monika, Prada."
+    assert loop.whisper_prompt(words, "Velvet", budget=40) == "Toru Kitajima, Monika, Prada. Velvet"
+    assert loop.whisper_prompt([], "  Velvet ") == "Velvet"
+    assert loop.whisper_prompt([]) == ""
+    long = loop.whisper_prompt([f"Name{i}" for i in range(500)])
+    assert len(long) <= loop.PROMPT_CHARS and long.endswith("Name1, Name0.")

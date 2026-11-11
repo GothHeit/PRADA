@@ -143,7 +143,8 @@ class VoiceSettings:
     # openWakeWord pretrained names (e.g. "hey_jarvis") or paths to custom .onnx models.
     wake_words: tuple[str, ...] = ("hey_jarvis",)
     threshold: float = 0.5  # wake word score (0-1) that counts as heard
-    whisper_model: str = "small"  # whisper.cpp model name or path to a ggml .bin
+    # whisper.cpp model name or path to a ggml .bin; "small" is lighter (~0.5 GB, more slips)
+    whisper_model: str = "large-v3-turbo"
     language: str = "auto"  # what you speak: "auto" or a code such as "en", "ru"
     # Text whisper reads before each request, e.g. names it should spell right ("Kitajima").
     whisper_prompt: str = ""

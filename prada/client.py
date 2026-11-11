@@ -2,7 +2,8 @@
 
 `connect()` returns a session whose `send(text, module=None, speak=None, **options)` gives a
 Reply; `speak(kind, text)` hears what is said before it is done (see prada.node.Node.handle).
-`cut(text, heard)` tells the node a reply was interrupted after `heard` (see Node.cut).
+`cut(text, heard)` tells the node a reply was interrupted after `heard` (see Node.cut);
+`vocabulary()` gives the names her ears should know (see Node.vocabulary).
 Under PRADA_FAKE_LLM or PRADA_NODE=local it always runs in-process, so tests and smoke
 runs never reach a real node or model.
 """
@@ -40,6 +41,9 @@ class LocalSession:
 
     def cut(self, text: str, heard: str) -> bool:
         return self.node.cut(Cut(text=text, heard=heard))
+
+    def vocabulary(self) -> list[str]:
+        return self.node.vocabulary()
 
 
 class RemoteSession:
@@ -87,6 +91,16 @@ class RemoteSession:
             ) from e
         except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as e:
             raise NodeError(f"lost the PRADA node at {self.url} ({e})") from e
+
+    def vocabulary(self, timeout: float = 2.0) -> list[str]:
+        try:
+            with _opener.open(f"{self.url}/v1/vocabulary", timeout=timeout) as response:
+                words = json.load(response)["words"]
+        except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as e:
+            raise NodeError(f"no vocabulary from the PRADA node at {self.url} ({e})") from e
+        if not isinstance(words, list):
+            raise NodeError(f"the PRADA node at {self.url} sent a bad vocabulary")
+        return [w for w in words if isinstance(w, str)]
 
 
 def _reason(e: urllib.error.HTTPError) -> str:
