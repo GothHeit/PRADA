@@ -190,7 +190,7 @@ class Node:
             return
         try:
             self._traces().add(self._turn, reply.module, reply.text, reply.error)
-        except sqlite3.Error as e:
+        except Exception as e:  # the reply is already decided: never let this replace it
             print(f"trace: could not record this turn ({e})", file=sys.stderr)
 
     def _traces(self) -> Trace:

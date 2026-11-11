@@ -118,6 +118,18 @@ def test_store_error_never_changes_the_reply(tmp_path, capsys):
     assert "trace: could not record this turn" in capsys.readouterr().err
 
 
+def test_any_trace_error_never_changes_the_reply(tmp_path, capsys):
+    n = make(tmp_path)
+
+    class Broken:
+        def add(self, *args):
+            raise TypeError("not JSON serializable")
+
+    n._trace = Broken()
+    assert n.handle(Request(text="hi", module="talk")).text == "Hello."
+    assert "trace: could not record this turn" in capsys.readouterr().err
+
+
 def test_token_counts_come_from_the_model_reply():
     usage = {}
     token = llm.USAGE.set(usage)
