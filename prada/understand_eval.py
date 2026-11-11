@@ -419,15 +419,15 @@ def situation_of(case: Case, path: Path) -> tuple[mind.Situation, list[tuple[str
         reply = node.handle(Request(text=text, session=SESSION))
         outcomes += reply.outcomes
         turns.append((text, reply.text))
-    situation = mind.Situation(now=time.time(), players=_players(music, outcomes), offer=offer)
+    # what the node sees, as it would show her (the music module's choice among them); the
+    # players come from what the plays put on (the fake Spotify doesn't move the bridge)
+    situation = node.situation(SESSION)
+    situation.players = _players(music, outcomes)
+    situation.offer = situation.offer or offer
     choice = node._sessions.get(SESSION, {}).get("music", {}).get("choice")
     picks = {}
     if isinstance(choice, Choice):
-        situation.question = choice.question()
-        names = {"song": "the song", "album": "the album", "artist": "everything by the artist"}
-        for n, (kind, found) in enumerate(choice.options.items(), 1):
-            label = f"{names.get(kind, kind)}: {found.label}"
-            situation.options.append(mind.Option(label, len(found.tracks), "Corpus"))
+        for n, found in enumerate(choice.options.values(), 1):
             picks[n] = {
                 "tool": "music.play",
                 "what": found.label,

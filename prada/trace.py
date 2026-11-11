@@ -76,6 +76,7 @@ class Turn:
     path: list[str] = field(default_factory=list)
     calls: list[Call] = field(default_factory=list)
     acts: list[Act] = field(default_factory=list)
+    situation: str = ""  # as the model was shown it (prada.situation.render)
 
     def step(self, text: str) -> None:
         self.path.append(text)
@@ -108,6 +109,7 @@ class Trace:
             "calls": [asdict(c) for c in turn.calls],
             "actions": [asdict(a) for a in turn.acts],
             "options": turn.options,
+            "situation": turn.situation,
         }
         with self._db:
             cur = self._db.execute(
@@ -175,13 +177,16 @@ def describe(turn: dict) -> str:
     for c in turn.get("calls", []):
         tokens = ""
         if c.get("tokens_in") is not None or c.get("tokens_out") is not None:
-            tokens = f", {c.get('tokens_in') or '?'} tokens in, {c.get('tokens_out') or '?'} out"
+            n_in, n_out = (c.get(k) for k in ("tokens_in", "tokens_out"))
+            tokens = f", {'?' if n_in is None else n_in} tokens in, {'?' if n_out is None else n_out} out"
         failed = f", failed: {c['error']}" if c.get("error") else ""
         lines.append(f"  model: {c['prompt']} {_secs(c['ms'])}{tokens}{failed}")
     for a in turn.get("actions", []):
         why = f" ({a['error']})" if a.get("error") else ""
         took = f" {_secs(a['ms'])}" if a.get("ms") else ""
         lines.append(f"  did:   {a['summary']} [{a['kind']}]: {a['status']}{took}{why}")
+    if turn.get("situation"):
+        lines.append("  saw:   " + turn["situation"].replace("\n", "\n         "))
     if turn["error"]:
         lines.append(f"  error: {turn['error']}")
     lines.append(f"  said:  {turn['reply']!r}")

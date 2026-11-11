@@ -342,9 +342,7 @@ def _trace(args) -> int:
         log = trace.Trace(open_store("trace", trace.MIGRATIONS))
         if args.case is None:
             turns = log.last(args.last)
-            if not turns:
-                print("No turns recorded yet.")
-            print("\n\n".join(trace.describe(t) for t in turns))
+            print("\n\n".join(trace.describe(t) for t in turns) or "No turns recorded yet.")
             return 0
         turn = log.get(args.case)
     except (sqlite3.Error, OSError, RuntimeError) as e:

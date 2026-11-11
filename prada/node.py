@@ -15,8 +15,13 @@ else, or `PENDING_TTL` seconds of silence). A reversible kind, once confirmed, s
 for the rest of that conversation (`EPISODE_GAP` of silence ends it). Every action's end is appended to the action log
 (prada.actionlog).
 
-Every turn is also written to the flight recorder (prada.trace): the path it took, each model
-call with its timing, the actions and the reply.
+Every turn starts with its situation (prada.situation, `Node.situation`): the clock, how the
+words reached her, what each module's state provider sees (the music playing, a question or
+offer waiting for an answer), a held action she asked about, what she did lately, what isn't
+working and what she can do. It is rendered into the status block modules give the model.
+
+Every turn is also written to the flight recorder (prada.trace): the path it took, its
+situation, each model call with its timing, the actions and the reply.
 """
 
 import sqlite3
@@ -25,9 +30,10 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from prada import actionlog, actions, llm, persona, router, status, trace, vectors, vocabulary
+from prada import actionlog, actions, llm, persona, router, trace, vectors, vocabulary
+from prada import situation as seen
 from prada.actionlog import MIGRATIONS as LOG_MIGRATIONS
 from prada.actionlog import ActionLog
 from prada.actions import Risk
@@ -116,6 +122,7 @@ class Node:
         self._speak: Speak | None = None  # the current request's, while it is handled
         self._trace: Trace | None = None
         self._turn: Turn | None = None  # the current request's record, while it is handled
+        self._now: seen.Situation | None = None  # the current request's situation
         self._words: tuple[float, list[str]] | None = None  # (when, words) for her ears
 
     def start(self) -> None:
@@ -152,6 +159,7 @@ class Node:
                 self._record_turn(reply)
                 self._speak = None
                 self._turn = None
+                self._now = None
                 self._summarize_later()
 
     def _handle(self, request: Request) -> Reply:
@@ -163,6 +171,10 @@ class Node:
                 session.pop("_trusted", None)  # a new conversation confirms again
             session["_seen"] = now
             memory = self._mem()
+            self._now = self._situation(request, session, memory)
+            if self._turn is not None:
+                # what she can do is the same every turn: the trace keeps the rest
+                self._turn.situation = seen.render(replace(self._now, abilities=[]))
             if (reply := self._answer(request, session, memory)) is not None:
                 self._remember(memory, request.text, reply)
                 return reply
@@ -266,26 +278,47 @@ class Node:
             turns=memory.recent(MAX_TURNS),
             memory=memory.remembered(),
             recall=lambda text: memory.recall(text, MAX_TURNS),
-            status=self._status(memory),
+            status=seen.lines(self._now) if self._now else [],
             # A module with executors may have its text dropped by `_act`, so it never
             # speaks early: nothing said aloud may turn out not to be the reply.
             say=(lambda text: speak("part", text)) if speak and not module.executors else None,
         )
 
-    def _status(self, memory: Memory) -> list[str]:
-        """The facts for prada.status: the time, the last talk and what the action log
-        holds for this conversation (including a held action that was dropped)."""
+    def situation(self, sid: str | None, source: seen.Source | None = None):
+        """What is going on for session `sid` right now, as a turn would start with it."""
+        with self._lock:
+            session = self._sessions.get(sid, {}) if sid else {}
+            return self._situation(
+                Request(text="", session=sid, source=source), session, self._mem()
+            )
+
+    def _situation(self, request: Request, session: dict, memory: Memory) -> seen.Situation:
+        """This turn's situation: the node's own facts, then each module's (`observe`), a
+        held action waiting for a yes, the action log of this conversation and what she can
+        do. A state provider that fails only adds a line under `broken`."""
         now = self._clock()
-        lines = [status.now_line(now), status.since_line(memory.last_talk(), now)]
+        last = memory.last_talk()
+        s = seen.Situation(
+            now, players=None, last_talk=last, first_talk=last is None, source=request.source
+        )
+        for module in self.modules.values():
+            try:
+                module.observe(dict(session.get(module.name, {})), s)
+            except Exception as e:
+                print(f"{module.name}: no situation ({e})", file=sys.stderr)
+                s.broken.append(f"{module.name}: can't tell its state ({e})")
+            if module.ability:
+                s.abilities.append(seen.Ability(module.name, module.ability, module.examples))
+        if (held := self._pending.get(request.session)) and held.module in self.modules:
+            executors = {actions.kind_of(e.action): e for e in self.modules[held.module].executors}
+            s.confirm = [executors[a.kind].ask(a) for a in held.held if a.kind in executors]
         try:
-            done = self._actions().recent(now - EPISODE_GAP)
+            s.done = self._actions().recent(now - EPISODE_GAP)
+            s.since = EPISODE_GAP // 60
         except sqlite3.Error as e:
             print(f"actions: could not read the action log ({e})", file=sys.stderr)
-            done = []
-        if done:
-            since = f"last {EPISODE_GAP // 60} minutes"
-            lines.append(f"Your action log, {since}, in your words: " + "; ".join(done))
-        return lines
+            s.broken.append("her action log can't be read")
+        return s
 
     def _answer(self, request: Request, session: dict, memory: Memory) -> Reply | None:
         """Handle a request that answers a held action or asks about the action log; None

@@ -16,12 +16,6 @@ def now_line(ts: float) -> str:
     return "Now: " + datetime.fromtimestamp(ts).astimezone().strftime("%A %d %B %Y, %H:%M")
 
 
-def since_line(last: float | None, now: float) -> str:
-    if last is None:
-        return "You have never talked before."
-    return f"You last talked {ago(now - last)}."
-
-
 def ago(seconds: float) -> str:
     minutes = int(seconds // 60)
     if minutes < 1:
