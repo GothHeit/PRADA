@@ -14,6 +14,9 @@ only the person's next request can confirm it (a plain yes) or cancel it (a no, 
 else, or `PENDING_TTL` seconds of silence). A reversible kind, once confirmed, stays trusted
 for the rest of that conversation (`EPISODE_GAP` of silence ends it). Every action's end is appended to the action log
 (prada.actionlog).
+
+Every turn is also written to the flight recorder (prada.trace): the path it took, each model
+call with its timing, the actions and the reply.
 """
 
 import sqlite3
@@ -24,7 +27,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from prada import actionlog, actions, llm, persona, router, status, vectors
+from prada import actionlog, actions, llm, persona, router, status, trace, vectors
 from prada.actionlog import MIGRATIONS as LOG_MIGRATIONS
 from prada.actionlog import ActionLog
 from prada.actions import Risk
@@ -33,6 +36,7 @@ from prada.memory import MIGRATIONS as MEMORY_MIGRATIONS
 from prada.memory import fake_chat as memory_fake_chat
 from prada.module import Chat, Context, Cut, Module, Reply, Request
 from prada.store import open_store
+from prada.trace import Trace, Turn
 
 KEEP_ALIVE = "30m"  # how long Ollama keeps the model loaded between requests
 MAX_SESSIONS = 64
@@ -109,6 +113,8 @@ class Node:
         self._sessions: OrderedDict[str, dict] = OrderedDict()
         self._lock = threading.Lock()
         self._speak: Speak | None = None  # the current request's, while it is handled
+        self._trace: Trace | None = None
+        self._turn: Turn | None = None  # the current request's record, while it is handled
 
     def start(self) -> None:
         """Start the modules' background work for a long-running node (the music play
@@ -132,39 +138,70 @@ class Node:
         done: kind "part" is a finished sentence of `Reply.text` (they come in order, from
         its start), "filler" a line said before a slow action, not part of the text."""
         with self._lock:
-            name = request.module
             if gone is not None and gone():
-                return Reply(module=name, error="the client went away; request dropped")
+                return Reply(module=request.module, error="the client went away; request dropped")
             self._speak = speak
+            self._turn = Turn(request.text, request.session, dict(request.options), self._clock())
+            reply = Reply(module=request.module)
             try:
-                session = self._session(request.session)
-                now = self._clock()
-                if now - session.get("_seen", now) > EPISODE_GAP:
-                    session.pop("_trusted", None)  # a new conversation confirms again
-                session["_seen"] = now
-                memory = self._mem()
-                if (reply := self._answer(request, session, memory)) is not None:
-                    name = reply.module
-                    self._remember(memory, request.text, reply)
-                    return reply
-                if name is None:
-                    name, request = self._route(request, session)
-                module = self.modules.get(name)
-                if module is None:
-                    return Reply(module=name, error=f"no module named {name!r}")
-                ctx = self._context(module, session, memory)
-                reply = self._act(
-                    module, module.handle(request, ctx), ctx, request.session, session
-                )
-                session["current"] = self._hand_offer(name, reply, session)
-                reply = self._correct(memory, request.text, reply)
+                reply = self._handle(request)
+                return reply
+            finally:
+                self._record_turn(reply)
+                self._speak = None
+                self._turn = None
+                self._summarize_later()
+
+    def _handle(self, request: Request) -> Reply:
+        name = request.module
+        try:
+            session = self._session(request.session)
+            now = self._clock()
+            if now - session.get("_seen", now) > EPISODE_GAP:
+                session.pop("_trusted", None)  # a new conversation confirms again
+            session["_seen"] = now
+            memory = self._mem()
+            if (reply := self._answer(request, session, memory)) is not None:
                 self._remember(memory, request.text, reply)
                 return reply
-            except Exception as e:
-                return Reply(module=name, error=f"{name or 'router'}: {e}")
-            finally:
-                self._speak = None
-                self._summarize_later()
+            if name is None:
+                name, request = self._route(request, session)
+            else:
+                self._step(f"sent to {name} by name")
+            module = self.modules.get(name)
+            if module is None:
+                return Reply(module=name, error=f"no module named {name!r}")
+            ctx = self._context(module, session, memory)
+            reply = self._act(module, module.handle(request, ctx), ctx, request.session, session)
+            session["current"] = self._hand_offer(name, reply, session)
+            reply = self._correct(memory, request.text, reply)
+            self._remember(memory, request.text, reply)
+            return reply
+        except Exception as e:
+            return Reply(module=name, error=f"{name or 'router'}: {e}")
+
+    def _step(self, text: str) -> None:
+        if self._turn is not None:
+            self._turn.step(text)
+
+    def _record_turn(self, reply: Reply) -> None:
+        """Writes the finished turn to the flight recorder; a failure is only printed."""
+        if self._turn is None:
+            return
+        try:
+            self._traces().add(self._turn, reply.module, reply.text, reply.error)
+        except Exception as e:  # the reply is already decided: never let this replace it
+            print(f"trace: could not record this turn ({e})", file=sys.stderr)
+
+    def _traces(self) -> Trace:
+        if self._trace is None:
+            try:
+                db = open_store("trace", trace.MIGRATIONS, self._db_path)
+            except (sqlite3.Error, OSError, RuntimeError) as e:
+                print(f"trace: turns won't be recorded after a restart ({e})", file=sys.stderr)
+                db = open_store("trace", trace.MIGRATIONS, ":memory:")
+            self._trace = Trace(db, self._clock)
+        return self._trace
 
     def cut(self, cut: Cut) -> bool:
         """A voice client stopped her mid-reply: memory keeps only what was heard. False if
@@ -191,7 +228,7 @@ class Node:
     def _context(self, module: Module, session: dict, memory: Memory) -> Context:
         speak = self._speak
         return Context(
-            chat=self._chat(module.fake_chat),
+            chat=self._timed(self._chat(module.fake_chat), module.name),
             db=self._db(module),
             state=session.setdefault(module.name, {}),
             turns=memory.recent(MAX_TURNS),
@@ -227,6 +264,10 @@ class Node:
             module = self.modules[pending.module]
             fresh = self._clock() - pending.asked_at <= PENDING_TTL
             yes = actions.answer(request.text) if fresh else None
+            answer = (
+                "yes" if yes else "no" if yes is False else "not a yes" if fresh else "too late"
+            )
+            self._step(f"answer to a held question ({answer}, code)")
             if yes:
                 ctx = self._context(module, session, memory)
                 self._trusted(session).update(a.kind for a in pending.held)
@@ -245,6 +286,7 @@ class Node:
                 text = persona.timed_out() if not fresh else persona.not_a_yes()
                 return Reply(module=module.name, text=text)
         if request.module is None and (when := actionlog.asks_for_log(request.text)):
+            self._step(f"asks what she did {when} (code)")
             try:
                 text = self._actions().day(when)
             except sqlite3.Error as e:
@@ -276,6 +318,8 @@ class Node:
         said = [o.said for o in outcomes if o.said]
         if held:
             self._pending[sid] = Pending(module.name, held, self._clock())
+            for a in held:
+                self._act_step(a, "asked")
             said += [allowed[a.kind].ask(a) for a in held]
         # The module's own words come first, but never next to a failure or a question: it
         # may have written them assuming the action would work.
@@ -297,13 +341,18 @@ class Node:
             if line := executor.filler(action):
                 self._speak("filler", line)
                 self._speak = _once(self._speak)  # one filler per request is enough
+        started = time.perf_counter()
         outcome = actions.execute(action, executor, ctx)
+        ms = round((time.perf_counter() - started) * 1000)
         refused = executor is None or not isinstance(action, executor.action)
         status = "refused" if refused else "done" if outcome.ok else "failed"
-        self._record(module, action, executor, status, confirmed, outcome.error)
+        self._record(module, action, executor, status, confirmed, outcome.error, ms)
         return outcome
 
-    def _record(self, module, action, executor=None, status="done", confirmed=False, error=None):
+    def _record(
+        self, module, action, executor=None, status="done", confirmed=False, error=None, ms=0
+    ):
+        self._act_step(action, status, error, ms)
         if executor is None:
             executor = next((e for e in module.executors if isinstance(action, e.action)), None)
         risk = executor.risk if executor else Risk.SAFE
@@ -320,6 +369,10 @@ class Node:
         except sqlite3.Error as e:
             # The action already ran (or didn't): the user must still hear what happened.
             print(f"actions: could not log this action ({e})", file=sys.stderr)
+
+    def _act_step(self, action, status: str, error=None, ms: int = 0) -> None:
+        if self._turn is not None:
+            self._turn.acts.append(trace.Act(action.kind, action.describe(), status, ms, error))
 
     def _actions(self) -> ActionLog:
         if self._log is None:
@@ -352,6 +405,7 @@ class Node:
                 print(f"memory: could not fix {wrong!r} ({e})", file=sys.stderr)
                 continue
             if fixed:
+                self._step(f"fixed her memory: {clean(wrong)!r} -> {clean(right)!r}")
                 text = f"{reply.text} {persona.corrected(clean(wrong), clean(right))}".strip()
                 data = {**reply.data, "fixed": fixed}
                 return reply.model_copy(update={"text": text, "data": data})
@@ -467,23 +521,57 @@ class Node:
         current = session.get("current")
         if hit := router.explicit(request.text, self.modules):
             name, text = hit
+            self._step(f"/{name} prefix (code)")
             return name, request.model_copy(update={"text": text})
         modules = list(self.modules.values())
         if len(modules) == 1:
+            self._step("only module")
             return modules[0].name, request
         if current in self.modules:
             module = self.modules[current]
             if module.claims(request.text, session.setdefault(current, {})):
+                self._step(f"{current} claims it mid-conversation (code)")
                 return current, request  # no router call mid-conversation
         if wanted := next((m.name for m in modules if m.wants(request.text)), None):
+            self._step(f"{wanted} wants it (code)")
             return wanted, request  # "anota: ..." in any other conversation, no router call
-        name = router.route(request.text, modules, self._chat(router.fake_chat), current)
+        name = router.route(
+            request.text, modules, self._timed(self._chat(router.fake_chat), "router"), current
+        )
+        self._step(f"router picked {name}")
         if not self.modules[name].accepts(request.text):
+            self._step(f"{name} doesn't accept it, sent to {modules[0].name} (code)")
             name = modules[0].name  # e.g. a question the model sent to notes
         return name, request
 
     def _chat(self, fake):
         return self._client(fake)
+
+    def _timed(self, chat, owner: str):
+        """`chat` for `owner` (a module, "router"): while a turn is handled each call is
+        timed and recorded in it, with its token counts when the model gives them."""
+
+        def timed(*args, **kwargs):
+            turn = self._turn
+            if turn is None:
+                return chat(*args, **kwargs)
+            schema = kwargs.get("schema", args[1] if len(args) > 1 else None)
+            usage = {}
+            token = llm.USAGE.set(usage)
+            started = time.perf_counter()
+            error = None
+            try:
+                return chat(*args, **kwargs)
+            except Exception as e:
+                error = str(e) or type(e).__name__
+                raise
+            finally:
+                llm.USAGE.reset(token)
+                ms = round((time.perf_counter() - started) * 1000)
+                name = trace.prompt_name(owner, schema)
+                turn.calls.append(trace.Call(name, ms, error=error, **usage))
+
+        return timed
 
     def _session(self, sid: str | None) -> dict:
         if sid is None:

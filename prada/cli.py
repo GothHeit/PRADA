@@ -76,6 +76,12 @@ def main(argv: list[str] | None = None) -> int:
     fix.add_argument("wrong")
     fix.add_argument("right")
 
+    tr = sub.add_parser(
+        "trace", help="show her last turns: what she heard, why, what ran, how long"
+    )
+    tr.add_argument("--last", type=int, default=10, help="how many turns (default 10)")
+    tr.add_argument("--case", type=int, metavar="N", help="print turn N as an eval case line")
+
     persona = sub.add_parser("persona", help="show who PRADA is and where her persona file is")
     persona_sub = persona.add_subparsers(dest="persona_command")
     init = persona_sub.add_parser("init", help="write a persona file to edit (outside the repo)")
@@ -148,6 +154,8 @@ def main(argv: list[str] | None = None) -> int:
         return _memory(args)
     elif args.command == "persona":
         return _persona(args)
+    elif args.command == "trace":
+        return _trace(args)
     elif args.command == "eval" and args.compare:
         from prada.eval import compare
 
@@ -308,6 +316,39 @@ def _fact_line(f) -> str:
     old = f" (replaced by {f['superseded_by']})" if f["superseded_by"] is not None else ""
     fake = " [fake]" if f["model"] == "fake" else ""
     return f'fact {f["id"]} ({_date(f["ts"])}){old}{fake}: {f["fact"]} — "{f["quote"]}"'
+
+
+def _trace(args) -> int:
+    """Reads the flight recorder (prada.trace) straight from the store, node running or not."""
+    import sqlite3
+
+    from prada import trace
+    from prada.store import open_store
+
+    try:
+        log = trace.Trace(open_store("trace", trace.MIGRATIONS))
+        if args.case is None:
+            turns = log.last(args.last)
+            if not turns:
+                print("No turns recorded yet.")
+            print("\n\n".join(trace.describe(t) for t in turns))
+            return 0
+        turn = log.get(args.case)
+    except (sqlite3.Error, OSError, RuntimeError) as e:
+        print(f"prada: can't read the trace ({e})", file=sys.stderr)
+        return 1
+    if turn is None:
+        print(
+            f"prada: no turn #{args.case} (only the last {trace.KEEP_DAYS} days are kept)",
+            file=sys.stderr,
+        )
+        return 1
+    print(trace.case_line(turn, log.before(turn)))
+    print(
+        "Check `module` (or use `says`) before pasting: it is what she did, not what was right.",
+        file=sys.stderr,
+    )
+    return 0
 
 
 def _persona(args) -> int:
