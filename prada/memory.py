@@ -21,6 +21,12 @@ conversations. That is not a change of mind, so nothing of the wrong word is kep
 by keyword (prada.search) and by meaning (prada.vectors), merges both rankings (reciprocal
 rank fusion) and returns the few best she hasn't been given yet, said the way a person
 remembers: "About three months ago, one morning, you told me ...".
+
+Facts of lasting value also form her *profile* of the person, always in front of her with
+what she remembers (`remembered`), so she knows who they are even when their sentence shares
+no word with a stored fact. The summarizer marks each fact with a kind (who they are, people,
+tastes, work and study, plans, or just this moment); the profile shows the live ones grouped
+by kind, near-duplicates merged, within `PROFILE_CHARS`. It changes only when facts change.
 """
 
 import json
@@ -30,8 +36,9 @@ import sys
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from prada import persona, status
 from prada.search import Hit, KeywordIndex, plain, terms
@@ -74,6 +81,9 @@ MIGRATIONS = [
         PRIMARY KEY (kind, ref, model)
     );
     """,
+    """
+    ALTER TABLE memory_fact ADD COLUMN kind TEXT;  -- see KINDS; NULL = written before kinds
+    """,
 ]
 
 EPISODE_GAP = 30 * 60  # seconds of silence that end a conversation
@@ -98,6 +108,19 @@ MIN_QUOTE = 3  # characters a quote must have to count as evidence
 FIX_EPISODES = 3  # newest conversations whose messages, summaries and facts a fix rewrites
 FIX_RECENT = 20  # messages of the conversation going on where the wrong word must be
 FIX_MAX = 10  # a fix that would change more rows than this changes nothing
+PROFILE_CHARS = 800  # most of `remembered`'s budget her profile of them takes
+PROFILE_FACTS = 200  # live facts read to build it, newest first
+# Kinds of facts and how her profile names each group, in the order it shows them. A fact of
+# kind "moment" (tired today, eating now) is kept and searchable but not in the profile.
+KINDS = {
+    "self": "Who they are",
+    "people": "People in their life",
+    "tastes": "Tastes",
+    "work": "Work and study",
+    "plans": "Plans",
+    None: "Other things they told you",  # facts from before kinds
+}
+SAME_FACT = 0.75  # content words two facts share (Jaccard) to count as the same fact
 # Words too common to be what she misheard (English and Portuguese).
 _SMALL_WORDS = set(
     "a an and are but can for from had has her him his how its not now one our out she the "
@@ -105,6 +128,7 @@ _SMALL_WORDS = set(
     "com das dos ela ele era isso mas não nao que sim uma você voce é e o os as de do da "
     "eu me meu minha".split()
 )
+_NEGATIONS = {"not", "não", "nao"}  # small words that still change what a fact says
 # Their message says she got something wrong (not that they changed their mind).
 _CUE = re.compile(
     r"\b(?:mis-?heard|mis-?understood|heard (?:it |that |me |my \w+ )?wrong"
@@ -185,7 +209,11 @@ _TASK = (
     "'User:' line, never your words. No facts from drill sentences, nothing you guessed. If "
     "a fact changes or corrects one you already know (listed with numbers below the "
     "conversation), set replaces to that number; leave out facts you already know "
-    "unchanged. Fill the JSON object matching the provided schema."
+    "unchanged. Give each fact a kind: self (who they are: name, age, home, languages, "
+    "health, pets), people (someone in their life), tastes (what they like or dislike), work "
+    "(job, studies, projects, what they are learning), plans (something they intend to do), "
+    "or moment (true only for now: tired today, eating dinner). Fill the JSON object "
+    "matching the provided schema."
 )
 _ASK = "\n\nNow write what you remember, in the first person, speaking to the user ('I ...', 'You ...')."
 
@@ -194,6 +222,14 @@ class Fact(BaseModel):
     fact: str = Field(..., description="One short sentence to them, e.g. 'You play the cello.'")
     quote: str = Field(..., description="Their exact words from a User line that say it")
     replaces: int | None = Field(None, description="Number of a known fact this corrects")
+    kind: Literal["self", "people", "tastes", "work", "plans", "moment"] | None = Field(
+        None, description="What the fact is about; moment = true only for now"
+    )
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _known_kind(cls, kind):  # a kind it made up must not cost the whole summary
+        return kind if isinstance(kind, str) and (kind in KINDS or kind == "moment") else None
 
 
 class Summary(BaseModel):
@@ -358,6 +394,12 @@ class Memory:
             "ORDER BY id DESC",
             (episode,),
         ).fetchall()
+        live = [
+            _content(r["fact"])
+            for r in self.db.execute(
+                "SELECT fact FROM memory_fact WHERE superseded_by IS NULL AND model IS NOT 'fake'"
+            )
+        ]
         with self.db:
             self.db.execute(
                 "UPDATE memory_episode SET summary = ?, model = ? WHERE id = ?",
@@ -370,10 +412,14 @@ class Memory:
                 turn = _quoted(quote, said)
                 if turn is None or not text:
                     continue  # no evidence: she would be remembering her own words
+                words = _content(text)
+                if fact.replaces not in known and words and words in live:
+                    continue  # a fact she already has, said again in the same words
+                live.append(words)
                 new = self.db.execute(
-                    "INSERT INTO memory_fact (episode, turn, ts, fact, quote, model) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (episode, turn["id"], turn["ts"], text, quote, model),
+                    "INSERT INTO memory_fact (episode, turn, ts, fact, quote, model, kind) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (episode, turn["id"], turn["ts"], text, quote, model, fact.kind),
                 ).lastrowid
                 if fact.replaces in known and fact.replaces != new:
                     self.db.execute(
@@ -598,14 +644,51 @@ class Memory:
         finally:
             self.db.commit()
 
+    def _profile(self, budget: int = PROFILE_CHARS) -> list[sqlite3.Row]:
+        """The live facts of lasting value her profile shows, within `budget` characters:
+        newest first when they don't all fit. A fact a newer one says too (or nearly, which
+        may be a change the summarizer missed) is left out; an older one never hides a newer."""
+        rows = self.db.execute(
+            "SELECT id, turn, fact, kind FROM memory_fact WHERE superseded_by IS NULL "
+            "AND model IS NOT 'fake' AND kind IS NOT 'moment' ORDER BY id DESC LIMIT ?",
+            (PROFILE_FACTS,),
+        ).fetchall()
+        rows = [r for r in rows if r["kind"] in KINDS]
+        words = {r["id"]: _content(r["fact"]) for r in rows}
+
+        def covered(r) -> bool:
+            mine = words[r["id"]]
+            return any(o["id"] > r["id"] and _says_less(mine, words[o["id"]]) for o in rows)
+
+        kept = []
+        for r in rows:
+            if covered(r):
+                continue
+            kept.append(r)
+            if len(_profile_text(kept)) > budget:
+                kept.pop()
+                break
+        return kept
+
+    def _loaded(self, budget: int) -> tuple[list[sqlite3.Row], list[tuple[int, str]]]:
+        """The profile facts and the summaries `remembered(budget)` shows."""
+        profile = self._profile(min(PROFILE_CHARS, budget))
+        return profile, self._summaries(budget - _profile_chars(profile))
+
     def remembered(self, budget: int = MEMORY_CHARS) -> str:
-        """The newest episode summaries, one line each with its date, up to `budget` chars."""
+        """Her profile of them (their live facts of lasting value, grouped), then the newest
+        episode summaries, one line each with its date, all within `budget` chars; then the
+        end of the conversation they just came back from, if it has no summary yet."""
         with self._snapshot():
-            summaries, tail = self._summaries(budget), self._tail()
-        text = "\n".join(line for _, line in reversed(summaries))  # oldest first
+            (profile, summaries), tail = self._loaded(budget), self._tail()
+        parts = []
+        if profile:
+            parts.append(_profile_text(profile))
+        if summaries:
+            parts.append("\n".join(line for _, line in reversed(summaries)))  # oldest first
         if tail:
-            text += ("\n\n" if text else "") + tail
-        return text
+            parts.append(tail)
+        return "\n\n".join(parts)
 
     def _tail_turns(self) -> tuple[sqlite3.Row | None, list[sqlite3.Row]]:
         """The newest finished conversation that has no summary yet and the last
@@ -689,11 +772,13 @@ class Memory:
                         (live["id"], recent),
                     )
                 }
-            skip_summaries = {i for i, _ in self._summaries(MEMORY_CHARS)}
+            profile, summaries = self._loaded(MEMORY_CHARS)
+            skip_summaries = {i for i, _ in summaries}
             facts = {k: self._fact(k[1]) for k in order if k[0] == "fact"}
+        shown = {r["id"] for r in profile}  # her profile already says these
         quoted = {  # the fact says it better
             row["turn"] for fact, before in facts.values() for row in (fact, before) if row
-        }
+        } | {r["turn"] for r in profile}
         covered = set(skip_summaries)  # no vague line from these episodes (or a second one)
         now = self.clock()
         lines, used, seen = [], 0, set()
@@ -701,8 +786,8 @@ class Memory:
             hit = hits[key]
             if hit.kind == "fact":
                 fact, before = facts[key]
-                if ("fact", fact["id"]) in seen:
-                    continue
+                if ("fact", fact["id"]) in seen or (fact["id"] in shown and before is None):
+                    continue  # a change of mind is still worth saying: the profile has no past
                 seen.add(("fact", fact["id"]))
                 line, ts = _fact_line(fact, before, now), fact["ts"]
             else:
@@ -751,6 +836,34 @@ class Memory:
             "SELECT * FROM memory_fact WHERE superseded_by = ? ORDER BY id DESC", (row["id"],)
         ).fetchone()
         return row, before
+
+
+def _content(text: str) -> frozenset[str]:
+    """The words of a fact that carry its meaning (small words dropped, negations kept:
+    "you don't like coffee" must never count as "you like coffee")."""
+    return frozenset(_words(text).split()) - (_SMALL_WORDS - _NEGATIONS)
+
+
+def _says_less(a: frozenset[str], b: frozenset[str]) -> bool:
+    """Fact `a` says nothing `b` doesn't: its content words are all in `b`, or nearly all
+    of both are shared. Never for a fact with no content words."""
+    if not a or not b:
+        return False
+    return a <= b or len(a & b) / len(a | b) >= SAME_FACT
+
+
+def _profile_text(facts: list[sqlite3.Row]) -> str:
+    """Her profile: one line per kind, in `KINDS` order, oldest fact first in each."""
+    lines = ["What you know about them (they told you; still true):"]
+    for kind, label in KINDS.items():
+        group = [f["fact"] for f in sorted(facts, key=lambda f: f["id"]) if f["kind"] == kind]
+        if group:
+            lines.append(f"- {label}: " + " ".join(group))
+    return "\n".join(lines)
+
+
+def _profile_chars(facts: list[sqlite3.Row]) -> int:
+    return len(_profile_text(facts)) + 2 if facts else 0
 
 
 def _day(ts: float) -> str:

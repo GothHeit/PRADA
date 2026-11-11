@@ -160,6 +160,9 @@ def test_a_fact_replaces_the_message_it_quotes_in_recall():
             ]
         },
     )
+    move_on(mem, now)
+    # A fact her profile doesn't show (a passing one) is recalled instead of its message.
+    mem.db.execute("UPDATE memory_fact SET kind = 'moment'")
     got = mem.recall("where does my sister Ana work?")
     assert "in your words" in got and got.count("starts a new job") == 1
 
@@ -352,7 +355,11 @@ def test_node_summarizer_sees_known_facts_and_stores_new_ones(tmp_path, monkeypa
     assert "1: Your favorite anime is Naruto." in prompts[1]
     first, second = n._mem().facts()
     assert first["superseded_by"] == second["id"]
-    assert n._mem().remembered() == ""  # one exchange each: facts, but no summary
+    # One exchange each: facts, but no summary; the profile shows only the newest version.
+    assert n._mem().remembered() == (
+        "What you know about them (they told you; still true):\n"
+        "- Other things they told you: Your favorite anime is Frieren."
+    )
 
 
 def test_perceived_tonight_while_the_night_lasts():
