@@ -280,7 +280,7 @@ def test_compare_rejects_other_files(tmp_path, capsys):
     partial = tmp_path / "y.json"
     partial.write_text(json.dumps({"suite": "assistant", "backend": "b", "model": "m"}))
     assert assistant_eval.compare([str(partial)]) == 1
-    assert "not an assistant eval results file" in capsys.readouterr().err
+    assert "not a valid assistant eval results file" in capsys.readouterr().err
 
 
 def test_results_file_next_to_a_json_transcript():

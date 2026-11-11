@@ -327,16 +327,25 @@ def compare(paths: list[str]) -> int:
     for path in paths:
         try:
             data = json.loads(Path(path).read_text(encoding="utf-8"))
-            if data.get("suite") != "assistant":
-                raise ValueError("not an assistant eval results file")
+            if data.get("suite") not in ("assistant", "understand"):
+                raise ValueError("not an assistant or understand eval results file")
+            if runs and data["suite"] != runs[0]["suite"]:
+                raise ValueError(
+                    f"a {data['suite']} run can't be compared with a {runs[0]['suite']} run"
+                )
             runs.append(data)
         except (OSError, ValueError, AttributeError) as e:
             print(f"eval: {path}: {e}", file=sys.stderr)
             return 1
     try:
-        print(format_comparison(runs))
+        if runs[0]["suite"] == "understand":
+            from prada.understand_eval import format_comparison as understand_comparison
+
+            print(understand_comparison(runs))
+        else:
+            print(format_comparison(runs))
     except (KeyError, TypeError, ValueError) as e:
-        print(f"eval: not an assistant eval results file ({e!r})", file=sys.stderr)
+        print(f"eval: not a valid {runs[0]['suite']} eval results file ({e!r})", file=sys.stderr)
         return 1
     return 0
 

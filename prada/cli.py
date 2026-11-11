@@ -101,17 +101,20 @@ def main(argv: list[str] | None = None) -> int:
     add_eval_arguments(evaluate)
     evaluate.add_argument(
         "--suite",
-        choices=["tutor", "assistant"],
+        choices=["tutor", "assistant", "understand"],
         default="tutor",
         help="tutor: labeled learner sentences (--lang); assistant: routing, honesty, "
-        "search offers and memory, plus a transcript of every exchange",
+        "search offers and memory, plus a transcript of every exchange; understand: hard "
+        "situational cases, scored on the calls she makes",
     )
-    evaluate.add_argument("--transcript", help="assistant suite: where to write the transcript")
+    evaluate.add_argument(
+        "--transcript", help="assistant and understand suites: where to write the transcript"
+    )
     evaluate.add_argument(
         "--compare",
         nargs="+",
         metavar="JSON",
-        help="assistant suite: show saved runs (the .json next to each transcript) side by side",
+        help="assistant or understand suite: show saved runs (the .json next to each transcript) side by side",
     )
 
     args = parser.parse_args(argv)
@@ -170,6 +173,10 @@ def main(argv: list[str] | None = None) -> int:
         from prada.eval import run as run_assistant_eval
 
         return run_assistant_eval(args.model, args.think, args.transcript, args.backend)
+    elif args.command == "eval" and args.suite == "understand":
+        from prada.understand_eval import run as run_understand_eval
+
+        return run_understand_eval(args.model, args.think, args.transcript, args.backend)
     elif args.command == "eval":
         from tutor.eval import run as run_eval
 
