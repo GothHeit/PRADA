@@ -1,0 +1,51 @@
+{"group": "correction", "before": ["play Hysteria"], "text": "no, I said Space Dementia", "calls": [{"tool": "music.play", "what": "space dementia"}], "note": "corrects the last request"}
+{"group": "correction", "before": ["play Unravel"], "text": "actually, I changed my mind, play Hysteria", "calls": [{"tool": "music.play", "what": "hysteria"}], "note": "change of mind, a new request"}
+{"group": "correction", "before": ["play Hysteria"], "text": "not Hysteria. Space Dementia", "calls": [{"tool": "music.play", "what": "space dementia"}]}
+{"group": "correction", "before": ["play Space Dementia"], "text": "no wait, on Spotify", "calls": [{"tool": "music.play", "what": "space dementia", "app": "Spotify"}], "note": "same song, other player"}
+{"group": "correction", "memory": [["my favorite band right now is Valve", "Valve, nice! What do you like about them?"]], "text": "you misheard me before, it's Velvet, not Valve", "calls": [{"tool": "memory.fix", "wrong": "valve", "right": "velvet"}], "note": "a mishearing: fix her memory"}
+{"group": "correction", "memory": [["I'm learning the violin these days", "The violin! How is it going?"]], "text": "I'm learning the cello now, not the violin anymore", "calls": [], "note": "a change of mind is not a mistake: nothing to fix"}
+{"group": "polite", "text": "could you put on some Muse for me?", "calls": [{"tool": "music.play", "what": "muse"}]}
+{"group": "polite", "text": "would you mind skipping this song?", "calls": [{"tool": "music.next", "app": "Spotify"}]}
+{"group": "polite", "text": "I'd love to hear Unravel right now", "calls": [{"tool": "music.play", "what": "unravel"}]}
+{"group": "polite", "text": "it's too loud in here, can you stop the music", "calls": [{"tool": "music.pause", "app": "Spotify"}]}
+{"group": "polite", "text": "I'm not in the mood for this song", "calls": [{"tool": "music.next", "app": "Spotify"}], "note": "indirect: a skip"}
+{"group": "polite", "text": "can I get some quiet please?", "calls": [{"tool": "music.pause", "app": "Spotify"}], "note": "indirect: a pause"}
+{"group": "polite", "situation": {"players": []}, "text": "let's have some music while I cook", "calls": [{"tool": "music.play"}], "note": "nothing named: any music will do"}
+{"group": "reference", "text": "skip this one", "calls": [{"tool": "music.next", "app": "Spotify"}]}
+{"group": "reference", "situation": {"players": [{"app": "Spotify", "state": "playing", "title": "Unravel"}]}, "text": "who sings this?", "calls": [], "note": "a question about what plays, not an action"}
+{"group": "reference", "text": "play the previous one again", "calls": [{"tool": "music.previous", "app": "Spotify"}]}
+{"group": "reference", "before": ["play Wave"], "text": "the second one", "calls": [{"tool": "music.play", "what": "wave", "app": "Corpus", "tracks": 2}], "note": "she asked: the song or the album?"}
+{"group": "reference", "before": ["play Wave"], "text": "the album", "calls": [{"tool": "music.play", "what": "wave", "app": "Corpus", "tracks": 2}]}
+{"group": "reference", "before": ["play Wave"], "text": "just the song please", "calls": [{"tool": "music.play", "what": "wave", "app": "Corpus", "tracks": 1}]}
+{"group": "reference", "situation": {"players": [], "last": ["I'm so tired today", "Long day? Want me to put on something calm?"]}, "text": "yes please", "calls": [{"tool": "music.play"}], "note": "a yes to her own offer"}
+{"group": "reference", "situation": {"players": [{"app": "Spotify", "state": "playing", "title": "Unravel"}, {"app": "Corpus", "state": "playing", "title": "Space Dementia"}]}, "text": "pause everything", "calls": [{"tool": "music.pause", "app": "Spotify"}, {"tool": "music.pause", "app": "Corpus"}]}
+{"group": "reference", "situation": {"players": [{"app": "Spotify", "state": "playing", "title": "Unravel"}, {"app": "Corpus", "state": "playing", "title": "Space Dementia"}]}, "text": "pause the one in Corpus", "calls": [{"tool": "music.pause", "app": "Corpus"}]}
+{"group": "reference", "situation": {"players": []}, "text": "skip", "calls": [], "note": "nothing is playing"}
+{"group": "reference", "text": "turn it up a bit", "calls": [], "note": "no volume tool: she must not pretend"}
+{"group": "change", "text": "play Hysteria, no wait, play Unravel", "calls": [{"tool": "music.play", "what": "unravel"}]}
+{"group": "change", "text": "note that I need eggs, actually no, forget it", "calls": []}
+{"group": "change", "text": "wake up my PC... no, never mind", "calls": []}
+{"group": "change", "text": "pause, no, never mind, keep it playing", "calls": []}
+{"group": "not_music", "text": "shuffle the deck", "calls": []}
+{"group": "not_music", "text": "let's play a game", "calls": []}
+{"group": "not_music", "text": "next week I have a cello recital", "calls": []}
+{"group": "not_music", "text": "my sister keeps playing that song all day", "calls": []}
+{"group": "not_music", "text": "the wifi keeps skipping", "calls": []}
+{"group": "notes_wake_search", "text": "don't let me forget the dentist on Friday", "calls": [{"tool": "notes.save", "text": "dentist friday"}]}
+{"group": "notes_wake_search", "text": "my computer is off, turn it on", "calls": [{"tool": "wake.send"}]}
+{"group": "notes_wake_search", "text": "turn off the PC", "calls": [], "note": "no tool for it, and never a wake"}
+{"group": "notes_wake_search", "text": "can you check what Reddit says about the RTX 5080?", "calls": [{"tool": "web.search", "query": "rtx 5080"}]}
+{"group": "notes_wake_search", "text": "what's the weather like in Lisbon tomorrow?", "calls": [{"tool": "web.offer"}], "note": "live facts: she asks before searching"}
+{"group": "notes_wake_search", "situation": {"offer": "what's the weather like in Lisbon tomorrow?"}, "text": "yeah go ahead", "calls": [{"tool": "web.search", "query": "lisbon"}]}
+{"group": "notes_wake_search", "situation": {"offer": "what's the weather like in Lisbon tomorrow?"}, "text": "no, play some Muse instead", "calls": [{"tool": "music.play", "what": "muse"}], "note": "a no to her offer, and a new request"}
+{"group": "multi", "text": "pause the music and note that I need eggs", "calls": [{"tool": "music.pause", "app": "Spotify"}, {"tool": "notes.save", "text": "eggs"}]}
+{"group": "multi", "text": "skip this song and tell me who sings the next one", "calls": [{"tool": "music.next", "app": "Spotify"}]}
+{"group": "multi", "text": "play Unravel and turn on my PC", "calls": [{"tool": "music.play", "what": "unravel"}, {"tool": "wake.send"}]}
+{"group": "portuguese", "text": "pula essa música", "calls": [{"tool": "music.next", "app": "Spotify"}]}
+{"group": "portuguese", "text": "Prada, toca Space Dementia do Muse", "calls": [{"tool": "music.play", "what": "space dementia"}]}
+{"group": "portuguese", "text": "pausa aí rapidinho", "calls": [{"tool": "music.pause", "app": "Spotify"}]}
+{"group": "portuguese", "text": "anota que preciso comprar cordas pro cello", "calls": [{"tool": "notes.save", "text": "cordas cello"}]}
+{"group": "portuguese", "text": "liga o PC pra mim", "calls": [{"tool": "wake.send"}]}
+{"group": "portuguese", "text": "play a música Unravel, por favor", "calls": [{"tool": "music.play", "what": "unravel"}], "note": "mixed English and Portuguese"}
+{"group": "portuguese", "before": ["play Unravel"], "text": "não, eu falei Hysteria", "calls": [{"tool": "music.play", "what": "hysteria"}]}
+{"group": "portuguese", "text": "embaralha as cartas", "calls": [], "note": "shuffle the cards: not music"}
