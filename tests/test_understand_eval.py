@@ -1,4 +1,6 @@
 import json
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -19,6 +21,17 @@ def test_evalset_is_well_formed():
     situations = {key for c in CASES for key in c.situation}
     assert situations == {"players", "last", "offer"}
     assert len({c.text for c in CASES}) == len(CASES)  # --compare lines cases up by text
+    held = [c for c in CASES if c.held]
+    assert len(held) >= 20 and {c.group for c in held} == set(u.GROUPS)
+    assert not CASES[50].held and all(c.held for c in CASES[51:])  # the first 51 stay as they were
+
+
+def test_held_out_cases_are_counted_apart():
+    first, held = CASES[0], next(c for c in CASES if c.held)
+    s = u.score([first, held])
+    m = u.summary(s)
+    assert m["cases"] == 1 and m["held"]["cases"] == 1
+    assert "held-out:" in u.format_report(s)
 
 
 @pytest.mark.parametrize(
@@ -190,3 +203,99 @@ def test_transcript_defaults_to_data_dir(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(u, "load_cases", lambda path=None: CASES[:2])
     assert prada_cli.main(["eval", "--suite", "understand"]) == 0
     assert list((tmp_path / "eval").glob("understand-fake-*.md"))
+
+
+def _scripted_mind(calls_by_text):
+    """A client whose understand calls answer from `calls_by_text` (keyed by the newest
+    message); every other caller keeps its fake."""
+    from prada import mind
+
+    def client(fake):
+        if fake is not mind.fake_chat:
+            return u._canned(fake)
+
+        def chat(messages, schema, on_text=None):
+            text = messages[-1]["content"].rpartition("newest message: ")[2]
+            return json.dumps({"note": "n", "calls": calls_by_text.get(text, [])})
+
+        return chat
+
+    return client
+
+
+def test_before_turns_need_no_model():
+    # the understand mode plays `before` turns on code paths only: never a fake reply
+    for case in (c for c in CASES if c.before):
+        s = u.score([case], mind_name="understand")
+        assert s.calls == 1, case.text  # only the understand call
+        assert all(not r.text.startswith("(fake") for _, r in s.results[0].before), case.text
+
+
+def test_understand_mode_scores_checked_calls():
+    second = next(c for c in CASES if c.text == "the second one")
+    said = next(c for c in CASES if c.text == "no, I said Space Dementia")
+    both = next(c for c in CASES if c.text == "pause everything")
+    client = _scripted_mind(
+        {
+            "the second one": [{"quote": "the second one", "tool": "music.choose", "option": 2}],
+            "no, I said Space Dementia": [
+                {"quote": "I said Space Dementia", "tool": "music.play", "what": "Space Dementia"}
+            ],
+            "pause everything": [
+                {"quote": "pause everything", "tool": "music.pause", "app": "Spotify"},
+                {"quote": "pause everything", "tool": "music.pause", "app": "Corpus"},
+                {"quote": "pause everything", "tool": "music.pause", "app": "Spotify"},
+            ],
+        }
+    )
+    s = u.score([second, said, both], client=client, mind_name="understand")
+    assert [r.failure for r in s.results] == ["", "", ""]
+    assert s.results[0].calls[0]["tracks"] == 2  # the pick became the album's play
+    m = u.summary(s)
+    assert m["mind"] == "understand" and m["dropped_calls"] == 0
+    assert "the understand step" in u.format_report(s)
+    assert "*note:* n" in u.format_transcript(s, "fake")
+    assert u._run_name(u.results(s, "m")) == "ollama: m understand"
+
+
+def test_understand_mode_situation():
+    hysteria = next(c for c in CASES if c.text == "no, I said Space Dementia")
+    situation, turns, picks = u.situation_of(hysteria, Path(tempfile.mkdtemp()) / "x.db")
+    spotify = next(p for p in situation.players if p.app == "Spotify")
+    assert (spotify.state, spotify.title) == ("playing", "Hysteria")  # the play moved it
+    assert turns[-1][0] == "play Hysteria" and "Hysteria" in turns[-1][1] and picks == {}
+    offer = next(c for c in CASES if c.text == "yeah go ahead")
+    situation, turns, _ = u.situation_of(offer, Path(tempfile.mkdtemp()) / "x.db")
+    assert situation.offer and turns == [(offer.situation["offer"], u.OFFER_LINE)]
+    quiet = next(c for c in CASES if c.situation.get("players") == [])
+    assert u.situation_of(quiet, Path(tempfile.mkdtemp()) / "x.db")[0].players == []
+
+
+def test_understand_mode_drops_and_invalid_replies():
+    case = u.Case("reference", "skip", [], {"players": []})
+
+    def client(reply):
+        return lambda fake: lambda messages, schema, on_text=None: reply
+
+    s = u.score(
+        [case],
+        client=client('{"note": "x", "calls": [{"quote": "skip", "tool": "music.next"}]}'),
+        mind_name="understand",
+    )
+    assert (
+        s.results[0].failure == ""
+        and s.dropped == 1
+        and "no playing player" in s.results[0].dropped[0]
+    )
+    s = u.score([case], client=client("nope"), mind_name="understand")
+    assert s.invalid == 1 and s.results[0].reply.text == "(not valid JSON)"
+
+
+def test_prada_eval_understand_mind_smoke(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("PRADA_FAKE_LLM", "1")
+    path = tmp_path / "run.md"
+    argv = ["eval", "--suite", "understand", "--mind", "understand", "--transcript", str(path)]
+    assert prada_cli.main(argv) == 0
+    out = capsys.readouterr().out
+    assert "the understand step" in out and "held-out:" in out and "dropped calls" in out
+    assert json.loads(path.with_suffix(".json").read_text())["mind"] == "understand"

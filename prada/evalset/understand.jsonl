@@ -49,3 +49,32 @@
 {"group": "portuguese", "text": "play a música Unravel, por favor", "calls": [{"tool": "music.play", "what": "unravel"}], "note": "mixed English and Portuguese"}
 {"group": "portuguese", "before": ["play Unravel"], "text": "não, eu falei Hysteria", "calls": [{"tool": "music.play", "what": "hysteria"}]}
 {"group": "portuguese", "text": "embaralha as cartas", "calls": [], "note": "shuffle the cards: not music"}
+{"group": "correction", "held": true, "before": ["play Hysteria"], "text": "that's the wrong one, I asked for Unravel", "calls": [{"tool": "music.play", "what": "unravel"}]}
+{"group": "correction", "held": true, "memory": [["I just started reading Dune", "Dune! Big book. How far in are you?"]], "text": "wait, you got that wrong, it was Dawn, not Dune", "calls": [{"tool": "memory.fix", "wrong": "dune", "right": "dawn"}], "note": "a mishearing: fix her memory"}
+{"group": "correction", "held": true, "memory": [["I work at a bakery on weekends", "A bakery! Do you get to take bread home?"]], "text": "I quit the bakery, now I work at a bookstore", "calls": [], "note": "life changed: nothing to fix"}
+{"group": "polite", "held": true, "text": "do you think you could play something by Muse?", "calls": [{"tool": "music.play", "what": "muse"}]}
+{"group": "polite", "held": true, "text": "mind pausing that for a sec?", "calls": [{"tool": "music.pause", "app": "Spotify"}]}
+{"group": "polite", "held": true, "text": "I've heard this one way too many times", "calls": [{"tool": "music.next", "app": "Spotify"}], "note": "indirect: a skip"}
+{"group": "reference", "held": true, "situation": {"players": [{"app": "Corpus", "state": "playing", "title": "Sugar Song and Bitter Step"}, {"app": "Spotify", "state": "paused", "title": "Unravel"}]}, "text": "skip it", "calls": [{"tool": "music.next", "app": "Corpus"}], "note": "only Corpus is playing"}
+{"group": "reference", "held": true, "situation": {"players": [{"app": "Spotify", "state": "paused", "title": "Unravel"}]}, "text": "carry on with the music", "calls": [{"tool": "music.resume", "app": "Spotify"}]}
+{"group": "reference", "held": true, "before": ["play Wave"], "text": "the whole album, please", "calls": [{"tool": "music.play", "what": "wave", "app": "Corpus", "tracks": 2}], "note": "she asked: the song or the album?"}
+{"group": "reference", "held": true, "situation": {"players": [{"app": "Spotify", "state": "playing", "title": "Sugar Song and Bitter Step"}]}, "text": "what's the name of this track?", "calls": [], "note": "a question, not an action"}
+{"group": "change", "held": true, "text": "play Unravel... hmm, no, play Space Dementia instead", "calls": [{"tool": "music.play", "what": "space dementia"}]}
+{"group": "change", "held": true, "text": "write down that I should call grandma, wait no, I already did", "calls": []}
+{"group": "not_music", "held": true, "text": "I played tennis for two hours today", "calls": []}
+{"group": "not_music", "held": true, "text": "Spotify keeps recommending me the same stuff", "calls": []}
+{"group": "not_music", "held": true, "text": "skip the small talk and tell me a joke", "calls": [], "note": "skip, but not a song"}
+{"group": "notes_wake_search", "held": true, "text": "put buying a birthday gift for Ana in my notes", "calls": [{"tool": "notes.save", "text": "gift ana"}]}
+{"group": "notes_wake_search", "held": true, "text": "boot up my computer please", "calls": [{"tool": "wake.send"}]}
+{"group": "notes_wake_search", "held": true, "text": "look up how long it takes to boil an egg", "calls": [{"tool": "web.search", "query": "boil egg"}], "note": "asked to search, even if she might know"}
+{"group": "multi", "held": true, "text": "next song, and add a note: buy rosin for the bow", "calls": [{"tool": "music.next", "app": "Spotify"}, {"tool": "notes.save", "text": "rosin"}]}
+{"group": "portuguese", "held": true, "situation": {"players": [{"app": "Spotify", "state": "paused", "title": "Space Dementia"}]}, "text": "volta a tocar a música, por favor", "calls": [{"tool": "music.resume", "app": "Spotify"}]}
+{"group": "portuguese", "held": true, "text": "me lembra de pagar a conta de luz", "calls": [{"tool": "notes.save", "text": "conta luz"}]}
+{"group": "portuguese", "held": true, "text": "qual é a capital da Austrália?", "calls": [], "note": "she knows it: no search"}
+{"group": "portuguese", "held": true, "before": ["play Space Dementia"], "text": "não essa, coloca Hysteria", "calls": [{"tool": "music.play", "what": "hysteria"}]}
+{"group": "polite", "held": true, "situation": {"players": [], "last": ["Oh, I've been trying to work.", "Oh, you're working? Don't push yourself too hard, okay?"]}, "text": "Yeah. So, can you play some music for me?", "calls": [{"tool": "music.play"}], "note": "real use 2026-11-11: answers her first, then asks; nothing named, any music will do. Today: 'say play + song'"}
+{"group": "portuguese", "held": true, "situation": {"players": [{"app": "Corpus", "state": "playing", "title": "Space Dementia"}]}, "text": "Pausa aí, rapidinho.", "calls": [{"tool": "music.pause", "app": "Corpus"}], "note": "real use 2026-11-11: went to chat, she asked back instead of pausing"}
+{"group": "reference", "held": true, "situation": {"players": [{"app": "Corpus", "state": "playing", "title": "Space Dementia"}], "last": ["Pausa aí, rapidinho.", "Did you want me to pause it for a bit?"]}, "text": "Yeah.", "calls": [{"tool": "music.pause", "app": "Corpus"}], "note": "real use 2026-11-11: a yes to her own offer. Today: 'Done! It's paused' with no action, a false claim"}
+{"group": "reference", "held": true, "situation": {"players": [{"app": "Corpus", "state": "playing", "title": "Space Dementia"}], "last": ["Play Space Dementia.", "I tried to play Space Dementia by Muse in Corpus, but it didn't work: Corpus didn't start playing."]}, "text": "It actually did.", "calls": [], "note": "real use 2026-11-11: it is already playing, so nothing to do; playing it again would restart the song"}
+{"group": "reference", "held": true, "text": "Uh...", "calls": [], "note": "real use 2026-11-11: an unfinished thought, not a request"}
+{"group": "correction", "held": true, "memory": [["my favorite color is burgundy velvet", "Burgundy velvet, what a rich color."]], "text": "Oh, so the color is just burgundy. Velvet is a variant.", "calls": [], "note": "real use 2026-11-11: refines a fact, not a misheard word; replacing 'velvet' in her memory would be wrong"}

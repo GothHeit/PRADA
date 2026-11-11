@@ -12,7 +12,12 @@ false claims (she says something was done when nothing ran: such a case fails ev
 right calls), invalid JSON, and milliseconds per stage (each model caller, then the code and
 actions around them).
 
-Run `prada eval --suite understand [--model] [--think on|off] [--backend NAME]`. Players,
+`--mind understand` scores the understand step instead (prada.mind, nothing runs): the same
+situation is rendered for it, earlier `before` turns are played through today's code paths
+(no model) so she sees the same history, and the checked calls it returns are scored.
+
+Run `prada eval --suite understand [--mind rules|understand] [--model] [--think on|off]
+[--backend NAME]`. Players,
 Spotify, Corpus and the web are fakes, and the PC is never woken: nothing outside the house
 changes. With PRADA_FAKE_LLM=1 it only exercises the plumbing (and the code-only paths).
 """
@@ -26,7 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from prada import backends, config, llm, router, store
+from prada import backends, config, llm, mind, router, store
 from prada.eval import SESSION, _seed, offered, warm_up
 from prada.honesty import claims_action
 from prada.memory import MIGRATIONS as MEMORY_MIGRATIONS
@@ -74,6 +79,10 @@ EXTRA_SONGS = [
     }
 ]
 FAIL_KINDS = ("false action", "missed action", "wrong call", "false claim")
+MINDS = ("rules", "understand")
+# Her line after an offer to search, in the understand mode (the rules mode plays the offer
+# through the web module).
+OFFER_LINE = "I'd have to look that up online. Want me to search?"
 
 
 @dataclass
@@ -90,6 +99,9 @@ class Case:
     before: list[str] = field(default_factory=list)  # earlier messages, same session
     memory: list[list[str]] = field(default_factory=list)  # past conversations, as in eval.py
     note: str = ""  # why the case is hard, for the person reading the report
+    # written after the first 51 and before any understand prompt, never used as a prompt
+    # example: reported apart, so a prompt tuned on the others is measured honestly
+    held: bool = False
 
 
 @dataclass
@@ -102,6 +114,7 @@ class Result:
     failure: str = ""
     claimed: bool = False  # said something was done when nothing ran
     before: list[tuple[str, Reply]] = field(default_factory=list)
+    dropped: list[str] = field(default_factory=list)  # understand mode: calls code refused
 
 
 @dataclass
@@ -109,6 +122,8 @@ class Score:
     results: list[Result] = field(default_factory=list)
     calls: int = 0  # model calls
     invalid: int = 0
+    mind: str = "rules"
+    dropped: int = 0  # understand mode: calls the code checks refused
 
 
 def _check_case(case: Case) -> None:
@@ -354,13 +369,129 @@ def run_case(case: Case, client: Callable[[Chat], Chat], path: Path, score: Scor
     return Result(case, reply, calls, seconds, stages, failure, claimed, before)
 
 
-def score(cases: list[Case] | None = None, client: Callable[[Chat], Chat] | None = None) -> Score:
-    result = Score()
+# --- the understand mode ----------------------------------------------------------------
+
+
+def _canned(fake) -> Chat:
+    """The offline fake for a caller: earlier turns use only today's code paths."""
+    return lambda messages, schema, on_text=None: fake(messages=messages, schema=schema)
+
+
+def _players(music, outcomes: list) -> list[mind.Player]:
+    """The players as the bridge shows them, with what an earlier Spotify or Corpus play
+    put on (the fake Spotify doesn't move the fake bridge)."""
+    playing = {}
+    for o in outcomes:
+        if not o.ok:
+            continue
+        kind = o.action.get("kind")
+        if kind == "music.play" and (now := o.data.get("now")):
+            playing["Spotify"] = (now.get("title", ""), now.get("artists", ""))
+        elif kind == "music.play_corpus":
+            playing["Corpus"] = (o.action.get("label", ""), "")
+    out = []
+    for p in music.bridge().status().players:
+        title, artist = p.title, p.artist
+        state = p.state
+        if p.name in playing:
+            (title, artist), state = playing.pop(p.name), "playing"
+        out.append(mind.Player(p.name, state, title, artist))
+    out += [mind.Player(app, "playing", t, a) for app, (t, a) in playing.items()]
+    return out
+
+
+def situation_of(case: Case, path: Path) -> tuple[mind.Situation, list[tuple[str, str]], dict]:
+    """The situation, the last turns and the pending choice (by option number) for the
+    understand mode. `before` turns go through the node on code paths only (no model)."""
+    from prada.music.library import Choice
+
+    modules = eval_modules(case.situation)
+    music = next(m for m in modules if m.name == "music")
+    node = Node(modules, db_path=path, background=False, client=_canned)
+    turns: list[tuple[str, str]] = []
+    if last := case.situation.get("last"):
+        turns.append((last[0], last[1]))
+    offer = case.situation.get("offer", "")
+    if offer:
+        turns.append((offer, OFFER_LINE))
+    outcomes = []
+    for text in case.before:
+        reply = node.handle(Request(text=text, session=SESSION))
+        outcomes += reply.outcomes
+        turns.append((text, reply.text))
+    situation = mind.Situation(now=time.time(), players=_players(music, outcomes), offer=offer)
+    choice = node._sessions.get(SESSION, {}).get("music", {}).get("choice")
+    picks = {}
+    if isinstance(choice, Choice):
+        situation.question = choice.question()
+        names = {"song": "the song", "album": "the album", "artist": "everything by the artist"}
+        for n, (kind, found) in enumerate(choice.options.items(), 1):
+            label = f"{names.get(kind, kind)}: {found.label}"
+            situation.options.append(mind.Option(label, len(found.tracks), "Corpus"))
+            picks[n] = {
+                "tool": "music.play",
+                "what": found.label,
+                "app": "Corpus",
+                "mode": "play",
+                "tracks": len(found.tracks),
+            }
+    situation.remembered = [said for said, _ in case.memory]
+    return situation, turns, picks
+
+
+def mind_calls(understood: mind.Understood, picks: dict) -> list[dict]:
+    """The checked calls in the eval's shape: a pick becomes the play it chose."""
+    calls = []
+    for c in understood.calls:
+        if c.tool == "music.choose":
+            calls.append(dict(picks[c.args["option"]]))
+        elif c.tool == "music.play":
+            call = {"tool": c.tool, "what": c.args["what"], "mode": c.args["mode"]}
+            if c.args["app"]:
+                call["app"] = c.args["app"]
+            calls.append(call)
+        elif c.tool == "wake.send":
+            calls.append({"tool": c.tool})
+        else:
+            calls.append({"tool": c.tool, **c.args})
+    return calls
+
+
+def run_mind_case(case: Case, client: Callable[[Chat], Chat], path: Path, score: Score) -> Result:
+    situation, turns, picks = situation_of(case, path)
+    timer = Timer(score, {mind.fake_chat: "understand"})
+    chat = timer.wrap(mind.fake_chat, client(mind.fake_chat))
+    start = time.perf_counter()
+    try:
+        understood = mind.understand(chat, situation, turns, case.text)
+        error = None
+    except Exception as e:  # a model that can't be reached: the case fails, the run goes on
+        understood, error = mind.Understood(valid=False), str(e)
+    seconds = time.perf_counter() - start
+    score.dropped += len(understood.dropped)
+    calls = mind_calls(understood, picks)
+    note = understood.note or ("(not valid JSON)" if not understood.valid else "")
+    reply = Reply(module="understand", text=note, error=error)
+    failure = f"error: {error}" if error else check(case, calls)
+    stages = dict(timer.ms)
+    stages["code"] = max(0.0, 1000 * seconds - sum(timer.ms.values()))
+    before = [(t, Reply(module="", text=said)) for t, said in turns[-len(case.before) :]]
+    before = before if case.before else []
+    return Result(case, reply, calls, seconds, stages, failure, False, before, understood.dropped)
+
+
+def score(
+    cases: list[Case] | None = None,
+    client: Callable[[Chat], Chat] | None = None,
+    mind_name: str = "rules",
+) -> Score:
+    result = Score(mind=mind_name)
     base = client or (lambda fake: llm.client(fake, keep_alive=KEEP_ALIVE))
+    run_one = run_mind_case if mind_name == "understand" else run_case
     with tempfile.TemporaryDirectory(prefix="prada-understand-", ignore_cleanup_errors=True) as tmp:
         for i, case in enumerate(cases if cases is not None else load_cases()):
             path = Path(tmp) / f"case{i}.db"
-            result.results.append(run_case(case, base, path, result))
+            result.results.append(run_one(case, base, path, result))
     return result
 
 
@@ -381,8 +512,7 @@ def _stage_ms(s: Score) -> dict[str, float]:
     return {k: round(v / n) for k, v in sorted(totals.items(), key=lambda kv: -kv[1])}
 
 
-def summary(s: Score) -> dict:
-    rs = s.results
+def _metrics(rs: list[Result]) -> dict:
     return {
         "right": sum(not r.failure for r in rs),
         "cases": len(rs),
@@ -398,6 +528,17 @@ def summary(s: Score) -> dict:
         "wrong_call": sum(r.failure.startswith("wrong call") for r in rs),
         "errors": sum(r.failure.startswith("error") for r in rs),
         "false_claims": sum(r.claimed for r in rs),
+    }
+
+
+def summary(s: Score) -> dict:
+    """The first cases and the held-out ones (`Case.held`) are counted apart."""
+    rs = s.results
+    return {
+        **_metrics([r for r in rs if not r.case.held]),
+        "held": _metrics([r for r in rs if r.case.held]),
+        "mind": s.mind,
+        "dropped_calls": s.dropped,
         "invalid": s.invalid,
         "model_calls": s.calls,
         "ms_per_stage": _stage_ms(s),
@@ -405,19 +546,30 @@ def summary(s: Score) -> dict:
     }
 
 
-def format_report(s: Score) -> str:
-    m = summary(s)
+def _metric_lines(m: dict, title: str) -> list[str]:
     lines = [
-        f"[understand] {m['cases']} cases",
-        f"  right calls:     {_pct(m['right'], m['cases'])}",
+        f"  {title + ':':<17}{_pct(m['right'], m['cases'])}",
     ]
     lines += [f"    {g + ':':<20}{_pct(*m['groups'][g])}" for g in GROUPS if m["groups"][g][1]]
+    return lines + [
+        f"    false actions:   {m['false_action']}",
+        f"    missed actions:  {m['missed_action']}",
+        f"    wrong calls:     {m['wrong_call']}",
+        f"    errors:          {m['errors']}",
+        f"    false claims:    {m['false_claims']}",
+    ]
+
+
+def format_report(s: Score) -> str:
+    m = summary(s)
+    step = " (the understand step)" if m["mind"] == "understand" else ""
+    lines = [f"[understand] {m['cases'] + m['held']['cases']} cases{step}"]
+    lines += _metric_lines(m, "right calls")
+    if m["held"]["cases"]:
+        lines += _metric_lines(m["held"], "held-out")
+    if m["mind"] == "understand":
+        lines.append(f"  dropped calls:   {m['dropped_calls']} (failed the code checks)")
     lines += [
-        f"  false actions:   {m['false_action']}",
-        f"  missed actions:  {m['missed_action']}",
-        f"  wrong calls:     {m['wrong_call']}",
-        f"  errors:          {m['errors']}",
-        f"  false claims:    {m['false_claims']}",
         f"  invalid JSON:    {m['invalid']} of {m['model_calls']} model replies",
         f"  seconds per turn: {m['seconds_per_turn']:.1f}",
         "  ms per turn by stage: "
@@ -426,7 +578,10 @@ def format_report(s: Score) -> str:
     failed = [r for r in s.results if r.failure]
     if failed:
         lines.append("  failed:")
-        lines += [f"    [{r.case.group}] {r.case.text!r}: {r.failure}" for r in failed]
+        lines += [
+            f"    [{r.case.group}{', held' if r.case.held else ''}] {r.case.text!r}: {r.failure}"
+            for r in failed
+        ]
     return "\n".join(lines)
 
 
@@ -456,9 +611,14 @@ def format_transcript(s: Score, model: str, backend: str = "ollama") -> str:
                 lines.append(f"- *remembered:* you: {said} / PRADA: {replied}")
             for text, reply in r.before:
                 lines += [f"- **you:** {text}", f"- **PRADA ({reply.module}):** {_said(reply)}"]
+            said = (
+                f"- *note:* {_said(r.reply)}"
+                if r.reply.module == "understand"
+                else f"- **PRADA ({r.reply.module}):** {_said(r.reply)}"
+            )
+            lines += [f"- **you:** {r.case.text}", said]
+            lines += [f"- *dropped:* {d}" for d in r.dropped]
             lines += [
-                f"- **you:** {r.case.text}",
-                f"- **PRADA ({r.reply.module}):** {_said(r.reply)}",
                 f"- *calls:* {_show(r.calls) or 'none'}; *expected:* {_show(r.case.calls) or 'none'}",
             ]
     return "\n".join(lines) + "\n"
@@ -471,11 +631,13 @@ def results(s: Score, model: str, backend: str = "ollama", think: bool | None = 
         "backend": backend,
         "model": model,
         "think": think,
+        "mind": s.mind,
         "date": time.strftime("%Y-%m-%d %H:%M"),
         **summary(s),
         "results": [
             {
                 "group": r.case.group,
+                "held": r.case.held,
                 "text": r.case.text,
                 "module": r.reply.module,
                 "calls": r.calls,
@@ -491,6 +653,8 @@ def results(s: Score, model: str, backend: str = "ollama", think: bool | None = 
 def _run_name(data: dict) -> str:
     think = data.get("think")
     flag = "" if think is None else f" think {'on' if think else 'off'}"
+    if data.get("mind") == "understand":
+        flag += " understand"
     return f"{data['backend']}: {data['model']}{flag}"
 
 
@@ -507,6 +671,11 @@ def format_comparison(runs: list[dict]) -> str:
         row(f"  {g}", [_pct(*r["groups"].get(g, [0, 0])) for r in runs])
     for key in ("false_action", "missed_action", "wrong_call", "false_claims"):
         row(key.replace("_", " "), [str(r[key]) for r in runs])
+    if any(r.get("held", {}).get("cases") for r in runs):
+        held = [r.get("held") or {"right": 0, "cases": 0} for r in runs]
+        row("held-out right", [_pct(h["right"], h["cases"]) for h in held])
+        for key in ("false_action", "missed_action", "wrong_call", "false_claims"):
+            row(f"  {key.replace('_', ' ')}", [str(h.get(key, "-")) for h in held])
     row("invalid JSON", [f"{r['invalid']} of {r['model_calls']}" for r in runs])
     row("seconds/turn", [f"{r['seconds_per_turn']:.1f}" for r in runs])
     verdicts: dict[str, list[str]] = {}
@@ -535,6 +704,7 @@ def run(
     think: str | None = None,
     transcript: str | None = None,
     backend: str | None = None,
+    mind_name: str = "rules",
 ) -> int:
     from prada.eval import results_path
 
@@ -565,10 +735,17 @@ def run(
             else model + ("" if think is None else f", think {'on' if think else 'off'}")
         )
         client = lambda fake: llm.client(fake, KEEP_ALIVE, model, think)  # noqa: E731
+    if mind_name == "understand":
+        label += ", the understand step"
     print(f"model: {label}")
     try:
         warm_up(client)
-        s = score(client=client)
+        if mind_name == "understand":  # also caches the understand prompt's fixed start
+            try:
+                mind.understand(client(mind.fake_chat), mind.Situation(time.time()), [], "hi")
+            except Exception:
+                pass  # e.g. Ollama down: every case will say so
+        s = score(client=client, mind_name=mind_name)
     except Exception as e:  # one line, not a traceback
         print(f"eval: [understand] stopped: {e}", file=sys.stderr)
         return 1

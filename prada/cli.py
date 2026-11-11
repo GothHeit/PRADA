@@ -111,6 +111,12 @@ def main(argv: list[str] | None = None) -> int:
         "--transcript", help="assistant and understand suites: where to write the transcript"
     )
     evaluate.add_argument(
+        "--mind",
+        choices=["rules", "understand"],
+        default="rules",
+        help="understand suite: score today's pipeline (rules) or the understand step alone",
+    )
+    evaluate.add_argument(
         "--compare",
         nargs="+",
         metavar="JSON",
@@ -176,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "eval" and args.suite == "understand":
         from prada.understand_eval import run as run_understand_eval
 
-        return run_understand_eval(args.model, args.think, args.transcript, args.backend)
+        return run_understand_eval(args.model, args.think, args.transcript, args.backend, args.mind)
     elif args.command == "eval":
         from tutor.eval import run as run_eval
 
