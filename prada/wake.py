@@ -70,6 +70,7 @@ class WakeModule(Module):
             config.wake_settings(None, None, None)
         except ValueError:
             situation.broken.append("turning on the PC: no PC address is set up")
+            situation.unable.add(self.name)
 
     def accepts(self, text: str) -> bool:
         return asks_to_wake(text)

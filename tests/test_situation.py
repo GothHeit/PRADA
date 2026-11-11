@@ -251,6 +251,17 @@ def test_music_state_comes_from_the_watcher_while_the_node_runs():
     s = Situation(0, players=None)
     music.observe({}, s, False)
     assert s.players is None and len(s.broken[0]) < 130 and s.broken[0].endswith("...)")
+    assert "music" not in s.unable  # Spotify plays through its own API: still offered
+
+
+def test_unreadable_players_keep_the_music_ability(tmp_path):
+    class Down(FakeBridge):
+        def status(self):
+            raise BridgeError("no answer")
+
+    node = Node([MusicModule(bridge=Down())], db_path=":memory:", background=False)
+    s = node.situation(None)
+    assert s.broken and "music" in {a.name for a in s.abilities}
 
 
 def test_a_choice_shows_only_while_it_can_be_answered():

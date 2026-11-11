@@ -83,6 +83,7 @@ class Situation:
     done: list[str] = field(default_factory=list)  # the action log, lately, her lines
     since: int = 0  # minutes the action log lines go back
     broken: list[str] = field(default_factory=list)  # what isn't working right now
+    unable: set[str] = field(default_factory=set)  # modules whose ability can't be used now
     abilities: list[Ability] = field(default_factory=list)
 
 

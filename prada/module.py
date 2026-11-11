@@ -133,7 +133,8 @@ class Module:
     def observe(self, state: dict, situation: Situation, current: bool) -> None:
         """The module's state provider: add what it knows right now to this turn's
         `situation` (its players, a question it is waiting on, a line under `broken` for what
-        isn't working, which also leaves its `ability` out). `state` is its state for the
+        isn't working; its name in `unable` when its whole ability can't be used, which
+        leaves the `ability` line out). `state` is its state for the
         session (read-only here); `current` = the conversation is with this module, so a
         question it asked can still be answered. Asked every turn, under the node's lock:
         keep it quick (no slow calls, never the model)."""

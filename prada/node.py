@@ -305,15 +305,14 @@ class Node:
             now, players=None, last_talk=last, first_talk=last is None, source=request.source
         )
         for module in self.modules.values():
-            broken = len(s.broken)
             try:
                 current = session.get("current") == module.name
                 module.observe(dict(session.get(module.name, {})), s, current)
             except Exception as e:
                 print(f"{module.name}: no situation ({e})", file=sys.stderr)
                 s.broken.append(f"{module.name}: can't tell its state ({seen.short(e)})")
-            # an ability that is broken right now is only listed as broken, never offered
-            if module.ability and len(s.broken) == broken:
+            # an ability that can't be used right now is only listed as broken, never offered
+            if module.ability and module.name not in s.unable:
                 s.abilities.append(seen.Ability(module.name, module.ability, module.examples))
         held = self._pending.get(request.session)
         if held and held.module in self.modules and now - held.asked_at <= PENDING_TTL:
