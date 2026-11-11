@@ -49,6 +49,14 @@ def test_an_honest_reply_is_not_asked_again():
     assert reply.text == HONEST and len(calls) == 1
 
 
+def test_a_yes_to_her_own_offer_cannot_claim_it_was_done():
+    # "did you want me to pause it?" "Yeah." Nothing was held for that yes, so nothing ran.
+    paused = "I couldn't pause it, I have no way to reach the player from here."
+    chat, calls = scripted([ok("Done! It's paused for now."), ok(paused)])
+    reply = AssistantModule().handle(Request(text="Yeah."), Context(chat=chat))
+    assert reply.text == paused and len(calls) == 2
+
+
 def test_claiming_twice_gives_the_safe_line():
     chat, calls = scripted([ok("Pizza ordered for 8pm!"), ok("I've ordered it, relax.")])
     reply = AssistantModule().handle(Request(text="order a pizza"), Context(chat=chat))
