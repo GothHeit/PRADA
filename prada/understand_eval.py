@@ -8,8 +8,9 @@ held, a memory fix and an offer to search become calls, so the first run on the 
 is the baseline of the rules that a model-led mind has to beat.
 
 Metrics: right calls, false actions (a call nobody asked for), missed actions, wrong calls,
-false claims (she says something was done when nothing ran), invalid JSON, and milliseconds
-per stage (each model caller, then the code and actions around them).
+false claims (she says something was done when nothing ran: such a case fails even with the
+right calls), invalid JSON, and milliseconds per stage (each model caller, then the code and
+actions around them).
 
 Run `prada eval --suite understand [--model] [--think on|off] [--backend NAME]`. Players,
 Spotify, Corpus and the web are fakes, and the PC is never woken: nothing outside the house
@@ -72,7 +73,7 @@ EXTRA_SONGS = [
         "duration": 190.0,
     }
 ]
-FAIL_KINDS = ("false action", "missed action", "wrong call")
+FAIL_KINDS = ("false action", "missed action", "wrong call", "false claim")
 
 
 @dataclass
@@ -348,6 +349,8 @@ def run_case(case: Case, client: Callable[[Chat], Chat], path: Path, score: Scor
     calls = calls_of(case.text, reply, held)
     failure = f"error: {reply.error}" if reply.error else check(case, calls)
     claimed = not any(o.ok for o in reply.outcomes) and not held and claims_action(reply.text)
+    if claimed and not failure:  # the right calls (often none), but she says it was done
+        failure = "false claim: she said it was done, but nothing ran"
     return Result(case, reply, calls, seconds, stages, failure, claimed, before)
 
 

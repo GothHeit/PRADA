@@ -143,6 +143,15 @@ def test_situation_sets_players_and_her_last_line(tmp_path):
     assert r.failure == "" and len(r.calls) == 2
 
 
+def test_false_claim_fails_a_case_with_no_calls(monkeypatch):
+    # the assistant's guard rewrites most claims; any that slip through fail the case
+    monkeypatch.setattr(u, "claims_action", lambda text: True)
+    case = next(c for c in CASES if c.text == "turn it up a bit")
+    r = u.score([case]).results[0]
+    assert r.calls == [] and r.claimed and r.failure.startswith("false claim")
+    assert u.summary(u.Score([r]))["false_claims"] == 1
+
+
 def test_report_transcript_and_compare(tmp_path, capsys):
     s = u.score(CASES[:3])
     report = u.format_report(s)
