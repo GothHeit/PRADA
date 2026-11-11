@@ -75,6 +75,12 @@ def main(argv: list[str] | None = None) -> int:
         "search offers and memory, plus a transcript of every exchange",
     )
     evaluate.add_argument("--transcript", help="assistant suite: where to write the transcript")
+    evaluate.add_argument(
+        "--compare",
+        nargs="+",
+        metavar="JSON",
+        help="assistant suite: show saved runs (the .json next to each transcript) side by side",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "wake":
@@ -114,14 +120,18 @@ def main(argv: list[str] | None = None) -> int:
         return _voice(args)
     elif args.command == "persona":
         return _persona(args)
+    elif args.command == "eval" and args.compare:
+        from prada.eval import compare
+
+        return compare(args.compare)
     elif args.command == "eval" and args.suite == "assistant":
         from prada.eval import run as run_assistant_eval
 
-        return run_assistant_eval(args.model, args.think, args.transcript)
+        return run_assistant_eval(args.model, args.think, args.transcript, args.backend)
     elif args.command == "eval":
         from tutor.eval import run as run_eval
 
-        return run_eval(args.lang, args.model, args.think)
+        return run_eval(args.lang, args.model, args.think, args.backend)
     elif args.tutor_command == "stats":
         from tutor.cli import show_stats
 

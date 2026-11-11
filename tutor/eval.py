@@ -126,17 +126,38 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         choices=["on", "off"],
         help="turn a thinking model's reasoning on or off (default: [llm] think)",
     )
+    parser.add_argument(
+        "--backend",
+        help="score a cloud API set up as [backends.NAME] instead of Ollama (evals only)",
+    )
 
 
-def run(langs: list[str] | None, model: str | None = None, think: str | None = None) -> int:
+def run(
+    langs: list[str] | None,
+    model: str | None = None,
+    think: str | None = None,
+    backend: str | None = None,
+) -> int:
     think = None if think is None else think == "on"
+    if backend and think is not None:
+        print("eval: --think only applies to Ollama models", file=sys.stderr)
+        return 1
     try:
-        chat = default_chat(model, think)
+        if backend:
+            from prada import backends
+            from tutor import fake_client
+
+            model, client = backends.client(backend, model)
+            chat = client(fake_client.chat)
+        else:
+            chat = default_chat(model, think)
         settings = config.llm_settings()
     except ValueError as e:
         print(f"eval: {e}", file=sys.stderr)
         return 1
-    if llm.fake_enabled():
+    if backend:
+        print(f"model: {backend} {model}" + (" (fake: nothing sent)" if llm.fake_enabled() else ""))
+    elif llm.fake_enabled():
         print("model: fake")
     else:
         think = settings.think if think is None else think
@@ -158,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m tutor.eval", description="Score the tutor")
     add_arguments(parser)
     args = parser.parse_args(argv)
-    return run(args.lang, args.model, args.think)
+    return run(args.lang, args.model, args.think, args.backend)
 
 
 if __name__ == "__main__":

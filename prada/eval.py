@@ -11,8 +11,9 @@ It also counts model replies that weren't valid JSON for their schema and times 
 How natural she sounds isn't scored: every exchange goes into a transcript file to read.
 
 Run `prada eval --suite assistant [--model] [--think on|off]` on a machine with Ollama; web
-searches use canned offline sources, so nothing leaves the house. With PRADA_FAKE_LLM=1 it
-only exercises the plumbing.
+searches use canned offline sources, so nothing leaves the house. `--backend NAME` scores a
+cloud model instead (`prada.backends`, evals only), and `--compare` lines up saved runs.
+With PRADA_FAKE_LLM=1 it only exercises the plumbing.
 """
 
 import argparse
@@ -25,7 +26,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from prada import config, llm, store
+from prada import backends, config, llm, store
 from prada.honesty import claims_action
 from prada.memory import MIGRATIONS as MEMORY_MIGRATIONS
 from prada.memory import Memory
@@ -209,9 +210,10 @@ def _said(reply: Reply) -> str:
     return reply.text if not reply.error else f"(error: {reply.error})"
 
 
-def format_transcript(s: Score, model: str) -> str:
+def format_transcript(s: Score, model: str, backend: str = "ollama") -> str:
     """Every exchange, to read how natural she sounds."""
     lines = [f"# PRADA assistant eval: {model}", "", time.strftime("%Y-%m-%d %H:%M"), ""]
+    lines += [f"backend: {backend}", ""]
     lines += ["```", format_report(s), "```"]
     for cat in CATEGORIES:
         lines += ["", f"## {cat}"]
@@ -229,28 +231,140 @@ def format_transcript(s: Score, model: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def results(s: Score, model: str, backend: str = "ollama", think: bool | None = None) -> dict:
+    """The run as data, saved next to the transcript, for `prada eval --compare`."""
+    return {
+        "suite": "assistant",
+        "backend": backend,
+        "model": model,
+        "think": think,
+        "date": time.strftime("%Y-%m-%d %H:%M"),
+        "categories": {
+            cat: [
+                sum(not r.failure for r in s.results if r.case.category == cat),
+                sum(r.case.category == cat for r in s.results),
+            ]
+            for cat in CATEGORIES
+        },
+        "false_claims": sum(r.failure.startswith("claimed") for r in s.results),
+        "invalid": s.invalid,
+        "calls": s.calls,
+        "seconds_per_turn": round(sum(r.seconds for r in s.results) / max(len(s.results), 1), 2),
+        "cases": [
+            {
+                "category": r.case.category,
+                "text": r.case.text,
+                "module": r.reply.module,
+                "failure": r.failure,
+                "seconds": round(r.seconds, 2),
+            }
+            for r in s.results
+        ],
+    }
+
+
+def _run_name(data: dict) -> str:
+    think = data.get("think")
+    flag = "" if think is None else f" think {'on' if think else 'off'}"
+    return f"{data['backend']}: {data['model']}{flag}"
+
+
+def format_comparison(runs: list[dict]) -> str:
+    """Runs side by side: one column per run, then the cases they disagree on."""
+    names = [_run_name(r) for r in runs]
+    width = max(16, *(len(n) + 2 for n in names))
+    lines = [f"{'':<20}" + "".join(f"{n:<{width}}" for n in names)]
+
+    def row(label: str, cells: list[str]) -> None:
+        lines.append(f"{label:<20}" + "".join(f"{c:<{width}}" for c in cells))
+
+    for cat in CATEGORIES:
+        row(cat, [_pct(*r["categories"].get(cat, [0, 0])) for r in runs])
+    row("false claims", [str(r["false_claims"]) for r in runs])
+    row("invalid JSON", [f"{r['invalid']} of {r['calls']}" for r in runs])
+    row("seconds/turn", [f"{r['seconds_per_turn']:.1f}" for r in runs])
+    verdicts: dict[tuple[str, str], list[str]] = {}
+    for i, r in enumerate(runs):
+        for c in r["cases"]:
+            cell = verdicts.setdefault((c["category"], c["text"]), ["(missing)"] * len(runs))
+            cell[i] = "pass" if not c["failure"] else f"FAIL: {c['failure']}"
+    differ = [(key, v) for key, v in verdicts.items() if len(set(v)) > 1]
+    if differ:
+        lines += ["", "cases that differ:"]
+        for (cat, text), v in differ:
+            lines.append(f"  [{cat}] {text!r}")
+            lines += [f"    {name}: {verdict}" for name, verdict in zip(names, v, strict=True)]
+    else:
+        lines += ["", "every case got the same verdict"]
+    return "\n".join(lines)
+
+
+def compare(paths: list[str]) -> int:
+    runs = []
+    for path in paths:
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            if data.get("suite") != "assistant":
+                raise ValueError("not an assistant eval results file")
+            runs.append(data)
+        except (OSError, ValueError, AttributeError) as e:
+            print(f"eval: {path}: {e}", file=sys.stderr)
+            return 1
+    try:
+        print(format_comparison(runs))
+    except (KeyError, TypeError, ValueError) as e:
+        print(f"eval: not an assistant eval results file ({e!r})", file=sys.stderr)
+        return 1
+    return 0
+
+
 def transcript_path(model: str) -> Path:
     name = re.sub(r"[^\w.-]+", "-", model).strip("-")
     return store.data_dir() / "eval" / f"assistant-{name}-{time.strftime('%Y%m%d-%H%M%S')}.md"
 
 
-def run(model: str | None = None, think: str | None = None, transcript: str | None = None) -> int:
+def results_path(transcript: Path) -> Path:
+    """Where the run's results go: next to the transcript, as .json."""
+    if transcript.suffix == ".json":
+        return transcript.with_name(transcript.stem + ".results.json")
+    return transcript.with_suffix(".json")
+
+
+def run(
+    model: str | None = None,
+    think: str | None = None,
+    transcript: str | None = None,
+    backend: str | None = None,
+) -> int:
     think = None if think is None else think == "on"
+    if backend and think is not None:
+        print("eval: --think only applies to Ollama models", file=sys.stderr)
+        return 1
     try:
         settings = config.llm_settings()
+        if backend:
+            model, client = backends.client(backend, model)
     except ValueError as e:
         print(f"eval: {e}", file=sys.stderr)
         return 1
-    if llm.fake_enabled():
-        label = "fake"
+    fake = llm.fake_enabled()
+    if backend:
+        source, label = ("fake" if fake else backend), f"{backend} {model}"
     else:
-        think = settings.think if think is None else think
-        label = (model or settings.model) + (
-            "" if think is None else f", think {'on' if think else 'off'}"
+        source = "fake" if fake else "ollama"
+        if not fake:
+            think = settings.think if think is None else think
+            model = model or settings.model
+        label = (
+            "fake"
+            if fake
+            else model + ("" if think is None else f", think {'on' if think else 'off'}")
         )
+        client = lambda fake: llm.client(fake, KEEP_ALIVE, model, think)  # noqa: E731
+    if backend and fake:
+        label += " (fake: nothing sent)"
     print(f"model: {label}")
     try:
-        client = lambda fake: llm.client(fake, KEEP_ALIVE, model, think)  # noqa: E731
         warm_up(client)
         s = score(client=client)
     except Exception as e:  # one line, not a traceback
@@ -260,8 +374,12 @@ def run(model: str | None = None, think: str | None = None, transcript: str | No
     path = Path(transcript) if transcript else transcript_path(label)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(format_transcript(s, label), encoding="utf-8")
+        path.write_text(format_transcript(s, label, source), encoding="utf-8")
         print(f"transcript: {path}")
+        saved = results_path(path)
+        data = results(s, model or "fake", source, think)
+        saved.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"results: {saved}")
     except OSError as e:
         print(f"eval: could not write the transcript ({e})", file=sys.stderr)
     if s.results and all(r.reply.error for r in s.results):
@@ -274,11 +392,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m prada.eval", description="Score PRADA as an assistant"
     )
-    parser.add_argument("--model", help="Ollama model to score instead of the configured one")
+    parser.add_argument("--model", help="model to score instead of the configured one")
     parser.add_argument("--think", choices=["on", "off"], help="a thinking model's reasoning")
+    parser.add_argument("--backend", help="a [backends.NAME] cloud API instead of Ollama")
     parser.add_argument("--transcript", help="where to write every exchange (Markdown)")
+    parser.add_argument("--compare", nargs="+", metavar="JSON", help="compare saved runs")
     args = parser.parse_args(argv)
-    return run(args.model, args.think, args.transcript)
+    if args.compare:
+        return compare(args.compare)
+    return run(args.model, args.think, args.transcript, args.backend)
 
 
 if __name__ == "__main__":

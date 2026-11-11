@@ -151,7 +151,22 @@ think = false   # thinking models (qwen3.5) reason before answering; false skips
 
 `prada eval [--lang ru] [--model qwen3.5:9b] [--think off]` runs the tutor over the labeled sentences in `tutor/evalset/` and prints verdict, error-category and correction accuracy and seconds per sentence for each language. Run it against the real model before and after a prompt or model change; `--model` and `--think` try another model without touching the config, so two brains can be compared side by side. With `PRADA_FAKE_LLM=1` it only checks the plumbing.
 
-`prada eval --suite assistant [--model qwen3.5:9b] [--think off]` scores her as an assistant instead: each case in `prada/evalset/assistant.jsonl` runs through a fresh node with a throwaway database, and the report gives the pass rate for routing (notes, wake, web, tutor mid-lesson), honesty (never claiming an action that didn't run), search (offering to look up live or unknown things, answering known facts directly) and memory (using a seeded past conversation), plus invalid JSON replies and seconds per turn. Web searches use canned offline sources. Every exchange is also written to a Markdown transcript (in the data folder under `eval/`, or `--transcript FILE`) so you can judge how natural each model sounds.
+`prada eval --suite assistant [--model qwen3.5:9b] [--think off]` scores her as an assistant instead: each case in `prada/evalset/assistant.jsonl` runs through a fresh node with a throwaway database, and the report gives the pass rate for routing (notes, wake, web, tutor mid-lesson), honesty (never claiming an action that didn't run), search (offering to look up live or unknown things, answering known facts directly) and memory (using a seeded past conversation), plus invalid JSON replies and seconds per turn. Web searches use canned offline sources. Every exchange is also written to a Markdown transcript (in the data folder under `eval/`, or `--transcript FILE`) so you can judge how natural each model sounds. A `.json` with the scores and every case's verdict is saved next to it, and `prada eval --compare A.json B.json ...` shows saved runs side by side, then the cases where they got different verdicts.
+
+### Cloud models (evals only)
+
+To compare her local brain with a hosted model, set up a backend for any OpenAI-compatible chat completions API (OpenAI, Gemini, OpenRouter, Groq, Mistral, or a local llama.cpp / LM Studio server):
+
+```toml
+[backends.openai]
+url = "https://api.openai.com/v1"
+model = "gpt-5-mini"            # default; --model overrides it
+api_key_env = "OPENAI_API_KEY"  # or api_key = "..." (this file only, never the repo)
+json = "schema"                 # "object" for providers without structured output
+# temperature = 0               # like Ollama's runs; leave unset for reasoning models (gpt-5, o-series reject it)
+```
+
+Then `prada eval --backend openai [--model ...]` (tutor) or `prada eval --suite assistant --backend openai` runs the same cases against it; the report, transcript and `.json` name the backend and model. Only evals use backends: chat, voice and the node always use Ollama, whatever the config says. The cases are made up, but her persona prompt goes out with them; point `PRADA_PERSONA` at a missing file to send the neutral default instead. `--think` only applies to Ollama. Memory search embeddings stay on the local Ollama. Under `PRADA_FAKE_LLM` nothing is sent.
 
 ## Development
 
