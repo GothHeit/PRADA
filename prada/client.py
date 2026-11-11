@@ -1,7 +1,9 @@
 """Talk to PRADA: through the home node when it is running, in-process otherwise.
 
-`connect()` returns a session whose `send(text, module=None, speak=None, **options)` gives a
-Reply; `speak(kind, text)` hears what is said before it is done (see prada.node.Node.handle).
+`connect()` returns a session whose `send(text, module=None, speak=None, source=None,
+**options)` gives a Reply; `speak(kind, text)` hears what is said before it is done (see
+prada.node.Node.handle) and `source` says how the words reached her (prada.situation.Source;
+`repl` sends typed).
 `cut(text, heard)` tells the node a reply was interrupted after `heard` (see Node.cut);
 `vocabulary()` gives the names her ears should know (see Node.vocabulary).
 Under PRADA_FAKE_LLM or PRADA_NODE=local it always runs in-process, so tests and smoke
@@ -19,6 +21,7 @@ import uuid
 from prada import config, llm
 from prada.module import Cut, Reply, Request
 from prada.server import HOST
+from prada.situation import Source
 
 # Never send localhost traffic through a configured HTTP proxy.
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -35,8 +38,10 @@ class LocalSession:
         self.node = node or Node()
         self.id = uuid.uuid4().hex
 
-    def send(self, text: str, module: str | None = None, speak=None, **options: str) -> Reply:
-        request = Request(text=text, module=module, session=self.id, options=options)
+    def send(
+        self, text: str, module: str | None = None, speak=None, source=None, **options: str
+    ) -> Reply:
+        request = Request(text=text, module=module, session=self.id, options=options, source=source)
         return self.node.handle(request, speak=speak)
 
     def cut(self, text: str, heard: str) -> bool:
@@ -52,8 +57,10 @@ class RemoteSession:
         self.timeout = timeout
         self.id = uuid.uuid4().hex
 
-    def send(self, text: str, module: str | None = None, speak=None, **options: str) -> Reply:
-        request = Request(text=text, module=module, session=self.id, options=options)
+    def send(
+        self, text: str, module: str | None = None, speak=None, source=None, **options: str
+    ) -> Reply:
+        request = Request(text=text, module=module, session=self.id, options=options, source=source)
         req = urllib.request.Request(
             f"{self.url}/v1/{'request' if speak is None else 'stream'}",
             data=request.model_dump_json().encode(),
@@ -155,7 +162,7 @@ def repl(session, module: str | None = None, **options: str) -> int:
         if not text.strip():
             continue
         try:
-            reply = session.send(text, module, **options)
+            reply = session.send(text, module, source=Source(via="typed"), **options)
         except NodeError as e:
             print(f"prada: {e}", file=sys.stderr)
             return 1

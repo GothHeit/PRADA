@@ -7,6 +7,8 @@ import sys
 
 
 class TextEars:
+    ear = "typed lines standing in for the microphone"
+
     def __init__(self, stream=None):
         self.stream = stream or sys.stdin
         self._line = ""

@@ -128,6 +128,8 @@ class MicEars:
         self.silence = s.silence
         self.language = s.language
         self.last_language: str | None = None  # of the last request, for language "auto"
+        self.last_sure: float | None = None  # how sure whisper was of it ("auto" only)
+        self.ear = "the PC microphone"  # how the situation names these ears
         self.hints = hints
         self.prompt = s.whisper_prompt
         self.cue: Callable[[], None] | None = None  # sounds before listening again
@@ -273,8 +275,10 @@ class MicEars:
     def _language(self, audio) -> tuple[str, str]:
         """The language to transcribe in, and whisper's guess ("" when it is set)."""
         if self.language != "auto":
+            self.last_sure = None
             return self.language, ""
         (guess, likely), _ = self.stt.auto_detect_language(audio)
+        self.last_sure = float(likely)
         return pick_language(guess, float(likely), self.last_language), f"{guess} {likely:.2f}"
 
     def close(self) -> None:

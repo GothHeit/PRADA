@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Protocol
 
 from prada.client import NodeError
+from prada.situation import Source
 from prada.stream import rest
 from tutor.languages import detect_language
 
@@ -277,11 +278,22 @@ def _say(mouth: Mouth, module: str | None, line: str, barge: Barge | None = None
     _utter(mouth, line, barge)
 
 
-def _turn(session, text: str, mouth: Mouth, barge: Barge | None, said: list[str]):
+def source(ears, start: str) -> Source:
+    """How a request reached her: by voice, through `ears`, opened by `start` ("wake word",
+    "follow-up" or "interruption"), with the language the ears heard it in when they say."""
+    language = getattr(ears, "last_language", None) or ""
+    sure = getattr(ears, "last_sure", None)
+    return Source(
+        via="voice", ear=getattr(ears, "ear", ""), start=start, language=language, sure=sure
+    )
+
+
+def _turn(session, text: str, mouth: Mouth, barge: Barge | None, said: list[str], src=None):
     """Send `text` and speak the reply as it comes; returns the Reply (None if the node
-    couldn't be reached). The reply's sentences she finished go in `said`."""
+    couldn't be reached). The reply's sentences she finished go in `said`; `src` says how the
+    words reached her."""
     try:
-        reply = session.send(text, speak=_speaker(mouth, said, barge))
+        reply = session.send(text, speak=_speaker(mouth, said, barge), source=src)
     except NodeError as e:
         print(f"error: {e}", file=sys.stderr)
         _say(mouth, "", CANT_REACH, barge)
@@ -335,20 +347,22 @@ def run(
         mouth.chime()
         text = ears.listen()
         follow_ups = 0
+        start = "wake word"
         while text:
             print(f"[{word}] you: {text}", file=sys.stderr)
             said: list[str] = []
+            src = source(ears, start)
             if not barge_in:
-                _turn(session, text, mouth, None, said)
+                _turn(session, text, mouth, None, said, src)
             else:
                 # The turn runs in a thread, so an interruption is answered at once, even
                 # while the node is still thinking or running an action.
                 barge = Barge(wake_words)
                 result = []
 
-                def turn(text=text, barge=barge, said=said, result=result) -> None:
+                def turn(text=text, barge=barge, said=said, result=result, src=src) -> None:
                     try:
-                        result.append(_turn(session, text, mouth, barge, said))
+                        result.append(_turn(session, text, mouth, barge, said, src))
                     finally:
                         debug("she is done")
                         barge.over.set()
@@ -366,6 +380,7 @@ def run(
                     if once:
                         return 0
                     follow_ups = 0
+                    start = "interruption"
                     continue
                 worker.join()
             if once:
@@ -373,4 +388,5 @@ def run(
             follow_ups += 1
             more = follow_up > 0 and (not max_follow_ups or follow_ups <= max_follow_ups)
             text = ears.listen(follow_up) if more else ""
+            start = "follow-up"
     return 0
