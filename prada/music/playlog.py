@@ -69,7 +69,11 @@ class PlayLog:
         self._hers: dict[str, float] = {}
         self._lock = threading.Lock()
         with db:  # a row left playing by an earlier run ended when that run did
-            db.execute("UPDATE music_play SET ended = 'stopped' WHERE ended = 'playing'")
+            db.execute(
+                "UPDATE music_play SET ended = 'stopped', ended_at = COALESCE(ended_at,"
+                " strftime('%Y-%m-%dT%H:%M:%SZ', started_at, printf('+%d seconds', seconds)))"
+                " WHERE ended = 'playing'"
+            )
 
     def mark(self, app: str, now: float) -> None:
         """She pressed a button on `app`; the next new track there was started by her."""

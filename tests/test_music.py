@@ -290,9 +290,14 @@ def test_play_log_marks_tracks_she_started(log):
 
 def test_play_log_closes_rows_left_by_an_earlier_run(tmp_path):
     db = open_store("music", MIGRATIONS, tmp_path / "prada.db")
-    PlayLog(db).see(Status([spotify()]), 0)
+    log = PlayLog(db)
+    log.see(Status([spotify()]), 0)
+    log.see(Status([spotify()]), 2)
+    log.see(Status([spotify("paused")]), 4)  # written: 4 s listened
     PlayLog(db)
-    assert rows(db)[0]["ended"] == "stopped"
+    row = rows(db)[0]
+    assert row["ended"] == "stopped"
+    assert (row["started_at"], row["ended_at"]) == ("1970-01-01T00:00:00Z", "1970-01-01T00:00:04Z")
 
 
 def test_watcher_backs_off_when_the_players_are_unreachable(log, capsys):

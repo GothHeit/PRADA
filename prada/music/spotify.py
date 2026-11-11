@@ -351,6 +351,8 @@ def save_token(path: Path, refresh: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    if hasattr(os, "fchmod"):
+        os.fchmod(fd, 0o600)  # a leftover .tmp keeps its old permissions otherwise
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump({"refresh_token": refresh}, f)
     os.replace(tmp, path)

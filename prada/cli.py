@@ -56,6 +56,7 @@ def main(argv: list[str] | None = None) -> int:
     music_sub = music.add_subparsers(dest="music_command")
     music_sub.add_parser("login", help="log in to Spotify once, so she can play songs by name")
     music_sub.add_parser("spotify", help="show the Spotify login, devices and what plays")
+    music_sub.add_parser("import", help="read the music catalog from Corpus now")
 
     persona = sub.add_parser("persona", help="show who PRADA is and where her persona file is")
     persona_sub = persona.add_subparsers(dest="persona_command")
@@ -131,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
         from prada.eval import compare
 
         return compare(args.compare)
+    elif args.command == "music" and args.music_command == "import":
+        return _music_import()
     elif args.command == "music" and args.music_command:
         return _spotify(args.music_command)
     elif args.command == "music":
@@ -203,6 +206,22 @@ def _spotify(command: str) -> int:
     if now.title:
         state = "playing" if now.playing else "paused"
         print(f"{state}: {now.title} by {now.artists} ({now.album}) on {now.device}")
+    return 0
+
+
+def _music_import() -> int:
+    from prada import llm
+    from prada.music.bridge import FakeBridge
+    from prada.music.corpus import CorpusCli, CorpusError, FakeCorpus
+    from prada.music.library import Library
+
+    library = Library(FakeCorpus(bridge=FakeBridge()) if llm.fake_enabled() else CorpusCli())
+    try:
+        songs = library.refresh(wait=True)
+    except CorpusError as e:
+        print(f"prada: {e}", file=sys.stderr)
+        return 1
+    print(f"Read {songs} songs from Corpus.")
     return 0
 
 

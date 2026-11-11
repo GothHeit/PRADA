@@ -7,6 +7,7 @@ import pytest
 from prada.eval import eval_modules
 from prada.module import Request
 from prada.music.bridge import FakeBridge
+from prada.music.corpus import FakeCorpus
 from prada.music.module import MusicModule
 from prada.music.play import Wish, fold, pick, wish
 from prada.music.spotify import (
@@ -23,6 +24,11 @@ from prada.music.spotify import (
     save_token,
 )
 from prada.node import Node
+
+
+def NO_CORPUS():  # noqa: N802
+    """A Corpus with no songs: these tests are about Spotify."""
+    return FakeCorpus(songs=[])
 
 
 @pytest.mark.parametrize(
@@ -208,7 +214,9 @@ def test_choose_a_device():
 @pytest.fixture
 def play_node(tmp_path):
     spotify = FakeSpotify()
-    music = MusicModule(bridge=FakeBridge(), spotify=spotify, launch=0.2, step=0.01, verify=0.1)
+    music = MusicModule(
+        bridge=FakeBridge(), spotify=spotify, launch=0.2, step=0.01, verify=0.1, corpus=NO_CORPUS()
+    )
     node = Node(modules=[music], db_path=tmp_path / "prada.db", background=False)
     return node, spotify
 
@@ -243,7 +251,7 @@ def test_nothing_close_is_never_played(play_node):
 
 def test_a_play_that_changes_nothing_is_never_claimed(tmp_path):
     spotify = FakeSpotify(stuck=True)
-    music = MusicModule(spotify=spotify, launch=0, step=0.01, verify=0.05)
+    music = MusicModule(spotify=spotify, launch=0, step=0.01, verify=0.05, corpus=NO_CORPUS())
     node = Node(modules=[music], db_path=tmp_path / "prada.db", background=False)
     reply = node.handle(Request(text="play Hysteria", session="s"))
     assert reply.text.startswith("I tried to play hysteria on Spotify, but")
@@ -285,7 +293,7 @@ def test_the_phone_is_the_last_resort(tmp_path):
     phone = Device("phone", "Phone", "Smartphone")
     spotify = FakeSpotify(open=False, others=[phone])
     spotify.open_app = lambda: None  # the PC's app never shows up
-    music = MusicModule(spotify=spotify, launch=0.05, step=0.01, verify=0.05)
+    music = MusicModule(spotify=spotify, launch=0.05, step=0.01, verify=0.05, corpus=NO_CORPUS())
     node = Node(modules=[music], db_path=tmp_path / "prada.db", background=False)
     reply = node.handle(Request(text="play Unravel", session="s"))
     assert spotify.played == [("spotify:track:unravel", "phone")]
@@ -295,24 +303,24 @@ def test_the_phone_is_the_last_resort(tmp_path):
 def test_no_device_even_after_opening(tmp_path):
     spotify = FakeSpotify(open=False)
     spotify.open_app = lambda: None  # Spotify never shows up
-    music = MusicModule(spotify=spotify, launch=0.05, step=0.01)
+    music = MusicModule(spotify=spotify, launch=0.05, step=0.01, corpus=NO_CORPUS())
     node = Node(modules=[music], db_path=tmp_path / "prada.db", background=False)
     reply = node.handle(Request(text="play Unravel", session="s"))
     assert "didn't show up as a device" in reply.text and spotify.played == []
 
 
 def test_not_logged_in_says_how(tmp_path):
-    music = MusicModule(spotify=FakeSpotify(logged_in=False))
+    music = MusicModule(spotify=FakeSpotify(logged_in=False), corpus=NO_CORPUS())
     node = Node(modules=[music], db_path=tmp_path / "prada.db", background=False)
     reply = node.handle(Request(text="play Unravel", session="s"))
     assert "prada music login" in reply.text and not reply.outcomes[0].ok
 
 
-def test_corpus_by_name_is_not_yet(play_node):
+def test_corpus_named_never_falls_back_to_spotify(play_node):
     node, spotify = play_node
     reply = node.handle(Request(text="toca Unravel no Corpus", session="s"))
-    assert "only on Spotify" in reply.text and not reply.outcomes
-    assert spotify.searched == []
+    assert reply.text.startswith("I haven't read your Corpus library yet")
+    assert not reply.outcomes and spotify.searched == []
 
 
 def test_eval_never_reaches_real_spotify():

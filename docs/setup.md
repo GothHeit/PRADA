@@ -118,7 +118,7 @@ sources = ["web", "reddit", "github"] # the ones she may use
 
 ## Music
 
-She plays songs by name on Spotify (below), and pauses, resumes and skips whatever plays in Spotify, Corpus or any other player that shows up in Windows' media controls (the overlay with the volume keys), and says what's playing. Plain commands skip the model, in English or Portuguese: "pause", "next song", "go back a song", "what's playing?", "pausa", "próxima", "que música é essa?"; add "on Spotify" / "no Corpus" to pick a player. She says it happened only after the player shows the change.
+She plays songs by name from Corpus or Spotify (below), and pauses, resumes and skips whatever plays in Spotify, Corpus or any other player that shows up in Windows' media controls (the overlay with the volume keys), and says what's playing. Plain commands skip the model, in English or Portuguese: "pause", "next song", "go back a song", "what's playing?", "pausa", "próxima", "que música é essa?"; add "on Spotify" / "no Corpus" to pick a player. She says it happened only after the player shows the change.
 
 The node reaches Windows through WSL interop: it keeps one `powershell.exe` running with a small script (`prada/music/bridge.ps1`, run inline, so the execution policy doesn't matter). Nothing to install or configure. `prada music` prints what Windows sees, to check the bridge.
 
@@ -144,6 +144,23 @@ This uses Spotify's official Web API (needs Premium): her one deliberate cloud c
 To log out, delete `spotify-token.json` (and remove the app's access at spotify.com/account/apps).
 
 While `prada node` runs, every track Spotify and Corpus play is logged in her database (table `music_play`: title, artist, album, seconds listened, finished / skipped / stopped, and whether she started it), for learning your taste later. It stays on this computer.
+
+### Play your own music from Corpus
+
+When what you ask for is clearly in your own files, Corpus plays it instead of Spotify: "play Space Dementia", "toca o álbum Origin of Symmetry", "shuffle Muse", "toca um rock" (a genre), "play something calm" (moods go by genre, since Corpus has no mood tags: calm, energetic, focus, happy, sad). A song plays alone, an album in order, an artist, genre or mood on shuffle; "on shuffle" / "em ordem" change that. "Add Unravel to the queue" / "coloca Unravel na fila" and "play Take a Bow next" add to Corpus' queue (Spotify doesn't queue). Names are matched in code, in any word order and with small mishearings. When a song and an album share a name she asks which one you mean. "On Spotify" / "no Corpus" picks the app; anything not in Corpus goes to Spotify.
+
+Corpus plays in its strip without opening the viewer or taking focus (and starts minimized if it wasn't running). She says it's playing only once Windows' media controls show Corpus playing one of those songs, and pauses Spotify then; when Spotify starts something, she pauses Corpus.
+
+### Corpus' music catalog
+
+To play your own music by name, PRADA keeps a copy of Corpus' music catalog (title, artist, album, genre and path of each song; table `music_track`). It reads it with Corpus' own `--export-music` command, which never changes Corpus' library, and reads it again every 6 hours while the node runs. Tell PRADA where Corpus is if `Corpus.exe` isn't on your PATH:
+
+```toml
+[music]
+corpus = 'C:\Apps\Corpus\Corpus.exe'  # a Windows path; single quotes keep the backslashes
+```
+
+`prada music import` reads the catalog right away and says how many songs it found.
 
 ## Wake the PC from another machine
 

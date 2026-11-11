@@ -10,7 +10,7 @@ Early construction, built for one home first.
 - **Teach languages**: a Japanese, French and Russian tutor that corrects your grammar and keeps the conversation going.
 - **Remember**: notes you ask her to keep, and the conversation you're having.
 - **Search the web when you ask**, through your own SearXNG, and tell you where the answer came from.
-- **Play your music**: "play Muse Space Dementia" on Spotify in about a second, and pause, resume, skip or ask what's playing in Spotify or any player that shows up in Windows' media controls.
+- **Play your music**: "play Muse Space Dementia" from your own files in Corpus, or on Spotify when it isn't there, in about a second; genres and moods ("something calm") and Corpus' queue too, and pause, resume, skip or ask what's playing in Spotify or any player that shows up in Windows' media controls.
 - **Wake the PC** over the network, and start herself when it boots.
 
 ## Quick start
@@ -44,4 +44,4 @@ Settings live in `~/.config/prada/config.toml` (or `$PRADA_CONFIG`), and who she
 
 [docs/setup.md](docs/setup.md) covers the rest: starting at boot on Windows, sleep and Wake-on-LAN, voice settings, training your own wake word, music (and the Spotify login), web search, choosing the model, evals and development.
 
-Next up: a conversation partner rather than a corrector, directed drills, playing your own music by name and mood, and more modules (anime, home devices).
+Next up: a conversation partner rather than a corrector, directed drills, learning your taste in music, and more modules (anime, home devices).

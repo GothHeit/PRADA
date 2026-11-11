@@ -12,10 +12,18 @@ becomes one SAFE `music.play` action: the node searches Spotify through its Web 
 (`prada.music.spotify`), picks the closest result, starts it on one of kafka's devices and
 checks Spotify really plays it. No model call, so it starts in about a second.
 
+Corpus comes first when the music is clearly in kafka's own files: the request is looked up
+in PRADA's copy of the Corpus catalog (`prada.music.library`) and becomes a SAFE
+`music.play_corpus` action, which hands the files to Corpus' command line and counts once
+Windows shows Corpus playing one of them. Corpus also takes "add X to the queue", "play X
+next", genres ("toca um rock") and moods ("something calm", by genre). Naming an app
+("on Spotify", "no Corpus") decides it; a playlist is always Spotify.
+
 While the node runs (`start`), a watcher logs every track played to `music_play`.
 """
 
 import re
+import sys
 import time
 import unicodedata
 from typing import ClassVar, Literal
@@ -23,7 +31,10 @@ from typing import ClassVar, Literal
 from prada import llm
 from prada.actions import Action, ActionFailed, Executor
 from prada.module import Context, Module, Reply, Request
+from prada.music import library
 from prada.music.bridge import BridgeError, FakeBridge, Player, Status, WindowsBridge
+from prada.music.catalog import key
+from prada.music.corpus import CorpusCli, CorpusError, FakeCorpus
 from prada.music.play import Wish, fold, pick, tokens, wish
 from prada.music.playlog import MIGRATIONS, PlayLog, Watcher
 from prada.music.spotify import FakeSpotify, Hit, Now, SpotifyApi, SpotifyError, choose, open_app
@@ -34,6 +45,7 @@ VERIFY_STEP = 0.15
 LAUNCH = 20.0  # seconds Spotify may take to open and show up as a device
 SPOTIFY_STEP = 0.5  # seconds between looks at Spotify (each is a Web API call)
 SPOTIFY_APP = "Spotify.exe"  # Spotify's app id in Windows' media controls
+PLAY_VERIFY = 12.0  # seconds for Corpus to show a song it was asked to play (it may start)
 
 # Matched on lower-case text without accents or punctuation (see `_norm`).
 _OBJ = r"(?:(?:the|this|that|a|essa|esta|esse|o) )?(?:music|song|track|tune|musica|faixa|som)"
@@ -284,6 +296,8 @@ class PlayExecutor(Executor):
                 now = api.now()
         except SpotifyError as e:
             raise ActionFailed(str(e)) from e
+        if _plays(hit, now):
+            self._module.quiet_corpus()  # one player at a time
         return {"hit": vars(hit), "now": vars(now)}
 
     def check(self, action: Play, result: dict, ctx: Context) -> None:
@@ -295,6 +309,108 @@ class PlayExecutor(Executor):
         hit, now = Hit(**result["hit"]), Now(**result["now"])
         where = f" on {now.device}" if now.device else ""
         return f"Playing {hit.describe()}{where}."
+
+
+class PlayCorpus(Action):
+    """Corpus plays these files (mode "play"), or adds them to its queue ("queue", "next")."""
+
+    kind: Literal["music.play_corpus"] = "music.play_corpus"
+    label: str  # "Space Dementia by Muse", "something calm"
+    paths: list[str]
+    titles: list[str]  # what Windows will show for them
+    mode: str = "play"
+    shuffle: bool = False
+
+    def describe(self) -> str:
+        if self.mode == "play":
+            return f"play {self.label} in Corpus"
+        return f"add {self.label} to Corpus' queue"
+
+
+def _corpus(status: Status) -> Player | None:
+    return next((p for p in status.players if p.name == "Corpus"), None)
+
+
+class PlayCorpusExecutor(Executor):
+    """Hands the files to Corpus, then watches Windows' media controls until Corpus plays
+    one of them (a queued song only needs Corpus playing). Spotify, if playing, is paused
+    once Corpus has started."""
+
+    action = PlayCorpus
+
+    def __init__(self, module: "MusicModule"):
+        self._module = module
+
+    def _ok(self, action: PlayCorpus, player: Player | None) -> bool:
+        if player is None or not player.playing or not _settled(player):
+            return False
+        return action.mode != "play" or key(player.title) in {key(t) for t in action.titles}
+
+    def run(self, action: PlayCorpus, ctx: Context) -> dict:
+        bridge = self._module.bridge()
+        paused = []
+        try:
+            before = bridge.status()
+            self._module.corpus().play(action.paths, action.mode, action.shuffle)
+            deadline = time.monotonic() + self._module.play_verify
+            while True:
+                after = _corpus(bridge.status())
+                if self._ok(action, after) or time.monotonic() >= deadline:
+                    break
+                time.sleep(VERIFY_STEP)
+            if self._ok(action, after) and action.mode == "play":
+                self._module.pressed(after.app)
+                pressed = [
+                    p.app
+                    for p in before.players
+                    if p.known
+                    and p.playing
+                    and p.name != "Corpus"
+                    and bridge.control(p.app, "pause")
+                ]
+                paused = self._stopped(bridge, pressed)
+        except CorpusError as e:
+            raise ActionFailed(str(e)) from e
+        except BridgeError as e:
+            raise ActionFailed(f"I couldn't check Corpus ({e})") from e
+        return {"after": vars(after) if after else None, "paused": paused}
+
+    def _stopped(self, bridge, apps: list[str]) -> list[str]:
+        """The names of the players among `apps` that show they stopped playing (up to
+        the module's `verify`); a pause that didn't take is never claimed."""
+        deadline = time.monotonic() + self._module.verify
+        while apps:
+            players = [bridge.status().get(app) for app in apps]
+            stopped = [p for p in players if p and _settled(p) and not p.playing]
+            if len(stopped) == len(apps) or time.monotonic() >= deadline:
+                return [p.name for p in stopped]
+            time.sleep(VERIFY_STEP)
+        return []
+
+    def check(self, action: PlayCorpus, result: dict, ctx: Context) -> None:
+        after = Player(**result["after"]) if result["after"] else None
+        if not self._ok(action, after):
+            if after and after.playing:
+                raise ActionFailed(f"Corpus is playing {after.describe()} instead")
+            raise ActionFailed("Corpus didn't start playing")
+
+    def done(self, action: PlayCorpus, result: dict) -> str:
+        after = Player(**result["after"])
+        if action.mode == "queue":
+            line = f"Added {action.label} to Corpus' queue."
+        elif action.mode == "next":
+            line = f"{action.label[0].upper()}{action.label[1:]} plays next in Corpus."
+        elif len(action.paths) == 1:
+            line = f"Playing {after.describe()} in Corpus."
+        else:
+            order = " on shuffle" if action.shuffle else ""
+            line = (
+                f"Playing {action.label} in Corpus{order}, {len(action.paths)} songs, "
+                f"starting with {after.describe()}."
+            )
+        if result["paused"]:
+            line += f" I paused {' and '.join(result['paused'])}."
+        return line
 
 
 class _RealSpotify(SpotifyApi):
@@ -347,8 +463,9 @@ def now_playing(status: Status, app: str | None) -> str:
 class MusicModule(Module):
     name = "music"
     description = (
-        "Plays a song, artist, album or playlist on Spotify, pauses, resumes and skips the "
-        "music playing on the PC (Spotify, Corpus) and says what song is playing."
+        "Plays a song, artist, album, genre or mood from Corpus (kafka's own files) or "
+        "Spotify, adds songs to the music queue or shuffles them, pauses, resumes and skips "
+        "the music playing on the PC and says what song is playing."
     )
     migrations = MIGRATIONS
     memory_note = "[music controls]"
@@ -360,12 +477,18 @@ class MusicModule(Module):
         spotify=None,
         launch: float = LAUNCH,
         step: float = SPOTIFY_STEP,
+        corpus=None,
+        play_verify: float = PLAY_VERIFY,
     ):
-        """`bridge` replaces Windows' media controls and `spotify` the Spotify Web API
-        (tests); `verify` = seconds to wait for a player to show a change, `launch` = for
-        Spotify to show up as a device after she opens it, `step` = between looks."""
+        """`bridge` replaces Windows' media controls, `spotify` the Spotify Web API and
+        `corpus` Corpus' command line (tests); `verify` = seconds to wait for a player to
+        show a change, `launch` = for Spotify to show up as a device after she opens it,
+        `step` = between looks, `play_verify` = for Corpus to play what it was given."""
         self._bridge = bridge
         self._spotify = spotify
+        self._corpus = corpus
+        self._library: library.Library | None = None
+        self.play_verify = play_verify
         self.verify = verify
         self.launch = launch
         self.step = step
@@ -376,6 +499,7 @@ class MusicModule(Module):
             NextExecutor(self),
             PreviousExecutor(self),
             PlayExecutor(self),
+            PlayCorpusExecutor(self),
         ]
 
     def bridge(self):
@@ -388,39 +512,70 @@ class MusicModule(Module):
             self._spotify = FakeSpotify() if llm.fake_enabled() else _RealSpotify()
         return self._spotify
 
+    def corpus(self):
+        if self._corpus is None:
+            fake = llm.fake_enabled()
+            self._corpus = FakeCorpus(bridge=self.bridge()) if fake else CorpusCli()
+        return self._corpus
+
+    def library(self) -> library.Library:
+        if self._library is None:
+            self._library = library.Library(self.corpus())
+        return self._library
+
     def start(self, db_path) -> None:
-        """Log what plays while the node runs (real players only, never the fake ones)."""
+        """Log what plays and read the Corpus catalog while the node runs (real players
+        only, never the fake ones)."""
         if self._bridge is None and not llm.fake_enabled():
             bridge = self.bridge()
             self._log = PlayLog(open_store(self.name, MIGRATIONS, db_path))
             Watcher(bridge.status, self._log).start()
+        if self._corpus is None and not llm.fake_enabled():
+            self.library().path = db_path
+            self.library().catalog()  # a first read in the background
 
     def pressed(self, app: str) -> None:
         if self._log is not None:
             self._log.mark(app, time.time())
 
+    def quiet_corpus(self) -> None:
+        """Pauses Corpus if it plays (Spotify just started); best effort."""
+        try:
+            corpus = _corpus(self.bridge().status())
+            if corpus and corpus.playing:
+                self.bridge().control(corpus.app, "pause")
+        except BridgeError:
+            pass
+
+    def claims(self, text: str, state: dict) -> bool:
+        choice = state.get("choice")
+        return choice is not None and choice.answer(text) is not None
+
     def wants(self, text: str) -> bool:
-        return command(text) is not None or wish(text, strict=True) is not None
+        if command(text) is not None or wish(text, strict=True) is not None:
+            return True
+        # "add X to the queue", "shuffle X": only when X is clearly in Corpus ("shuffle the
+        # deck", "coloca o carro na fila" go to the router)
+        asked = wish(text)
+        return bool(asked and asked.queued and self._clear(self._in_corpus(asked)))
 
     def accepts(self, text: str) -> bool:
         return command(text) is not None or wish(text) is not None
 
     def handle(self, request: Request, ctx: Context) -> Reply:
+        choice, mode = ctx.state.pop("choice", None), ctx.state.pop("mode", "play")
+        if choice is not None and (picked := choice.answer(request.text)):
+            return self._corpus_play(picked, mode)
         found = command(request.text)
         if found is None:
             asked = wish(request.text)
             if asked is None:
                 return Reply(
                     module=self.name,
-                    text="I can play something on Spotify if you tell me what, pause, resume "
-                    "or skip what's playing, or tell you what it is.",
+                    text="I can play something from Corpus or Spotify if you tell me what, "
+                    "pause, resume or skip what's playing, or tell you what it is.",
                 )
-            if asked.app == "corpus":
-                return Reply(
-                    module=self.name,
-                    text="I can't pick songs in Corpus yet, only on Spotify.",
-                )
-            return Reply(module=self.name, actions=[Play(query=asked.query, want=asked.kind)])
+            return self._play(asked, ctx, request.text)
         verb, app = found
         try:
             status = self.bridge().status()
@@ -433,3 +588,57 @@ class MusicModule(Module):
             return Reply(module=self.name, text=chosen)
         action = _ACTIONS[verb]
         return Reply(module=self.name, actions=[action(app=p.app, player=p.name) for p in chosen])
+
+    def _in_corpus(self, asked: Wish) -> "library.Found | library.Choice | str":
+        """What Corpus has for the wish, or the line she says when it has nothing."""
+        if asked.kind == "playlist":
+            return "Playlists are on Spotify, not in Corpus."
+        mood = None
+        if asked.kind == "mood":
+            mood = library.mood_of(asked.query)
+            if mood is None:
+                return f"I don't know which of your Corpus songs sound {asked.query}."
+        kinds = {"track": "song", "album": "album", "artist": "artist"}
+        try:
+            catalog = self.library().catalog()
+        except (CorpusError, OSError) as e:
+            print(f"music: Corpus' catalog unavailable ({e})", file=sys.stderr)
+            return "I can't read your Corpus library right now."
+        if not len(catalog):
+            return "I haven't read your Corpus library yet; `prada music import` reads it."
+        return library.find(catalog, asked.query, kinds.get(asked.kind), mood, asked.shuffle)
+
+    @staticmethod
+    def _clear(found) -> bool:
+        return isinstance(found, library.Found | library.Choice)
+
+    def _play(self, asked: Wish, ctx: Context, text: str) -> Reply:
+        """Corpus when the music is clearly in kafka's files (or Corpus is named), else
+        Spotify; queueing is Corpus only."""
+        if asked.app != "spotify" and (asked.mode, asked.shuffle) != ("play", None):
+            # "play Who's Next": the words read as "next" may be part of a name in Corpus
+            whole = wish(text, peel=False)
+            if whole and whole.app != "spotify" and self._clear(self._in_corpus(whole)):
+                asked = whole
+        found = None if asked.app == "spotify" else self._in_corpus(asked)
+        if asked.app == "corpus" or self._clear(found):
+            if isinstance(found, str):
+                return Reply(module=self.name, text=found)
+            if isinstance(found, library.Choice):
+                ctx.state["choice"], ctx.state["mode"] = found, asked.mode
+                return Reply(module=self.name, text=found.question())
+            return self._corpus_play(found, asked.mode)
+        if asked.mode != "play":
+            missing = f"{found} " if found else ""
+            return Reply(module=self.name, text=f"{missing}I can only queue songs in Corpus.")
+        return Reply(module=self.name, actions=[Play(query=asked.query, want=asked.kind)])
+
+    def _corpus_play(self, found: "library.Found", mode: str) -> Reply:
+        action = PlayCorpus(
+            label=found.label,
+            paths=[t.path for t in found.tracks],
+            titles=[t.title for t in found.tracks],
+            mode=mode,
+            shuffle=found.shuffle,
+        )
+        return Reply(module=self.name, actions=[action])

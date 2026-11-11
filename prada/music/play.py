@@ -2,7 +2,8 @@
 
 `wish(text)` turns "play Muse Space Dementia", "toca Evidências do Chitãozinho e Xororó",
 "play the album Origin of Symmetry" or "toca algo calmo" into a `Wish` without the model.
-`pick(wish, results)` chooses what to play: a result that covers everything kafka said
+Queue and shuffle words ("add X to the queue", "play X next", "on shuffle") are read too,
+for Corpus. `pick(wish, results)` chooses what Spotify plays: a result that covers everything kafka said
 wins (Spotify's own top result first), else the closest track; nothing close = None, so
 she never plays something random.
 """
@@ -22,6 +23,9 @@ class Wish:
     query: str  # what to search for, folded (see `fold`)
     kind: str = "any"  # any, track, artist, album, playlist, mood
     app: str | None = None  # "spotify" or "corpus" when named
+    mode: str = "play"  # "play", "queue" (end of the queue) or "next" (after this song)
+    shuffle: bool | None = None  # "on shuffle" / "in order"; None = not said
+    queued: bool = False  # the verb was "add ... to the queue" / "shuffle": not only music
 
 
 def fold(text: str) -> str:
@@ -97,19 +101,65 @@ _EMPTY = {
 }
 
 
-def wish(text: str, strict: bool = False) -> Wish | None:
+_POLITE = re.compile(r" (?:please|por favor|prada|for me|pra mim|now|agora)$")
+_SHUFFLE = re.compile(
+    r" (?P<s>on shuffle|shuffled|in shuffle|at random|in random order|no aleatorio|aleatorio"
+    r"|em modo aleatorio|embaralhado|embaralhada|in order|em ordem|na ordem)$"
+)
+_IN_ORDER = ("in order", "em ordem", "na ordem")
+_NEXT = re.compile(
+    r" (?:next|after this(?: one| song)?|depois dessa|depois desta|em seguida|na sequencia)$"
+)
+_QUEUE = re.compile(
+    r"(?P<lead>.*?)(?:add|adiciona|adicionar|coloca|bota|poe) (?P<body>.+?)"
+    r" (?:(?:to|on|in) (?:the|my) queue|(?:na|a|pra|para a) fila)"
+)
+_QUEUE_VERB = re.compile(r"(?P<lead>.*?)queue(?: up)? (?P<body>.+)")
+_SHUFFLE_VERB = re.compile(r"(?P<lead>.*?)(?:shuffle|embaralha) (?P<body>.+)")
+
+
+def _extras(t: str) -> tuple[str, str, bool | None, bool]:
+    """Peels the queue and shuffle words off a folded request: ("play x", mode, shuffle,
+    whether the verb was rewritten to "play")."""
+    mode, shuffle, rewritten = "play", None, False
+    while True:
+        if found := _POLITE.search(t):
+            pass
+        elif found := _SHUFFLE.search(t):
+            shuffle = found["s"] not in _IN_ORDER
+        elif mode == "play" and (found := _NEXT.search(t)):
+            mode = "next"
+        else:
+            break
+        t = t[: found.start()]
+    if mode == "play" and (m := _QUEUE.fullmatch(t) or _QUEUE_VERB.fullmatch(t)):
+        t, mode, rewritten = f"{m['lead']}play {m['body']}", "queue", True
+    elif m := _SHUFFLE_VERB.fullmatch(t):
+        t, shuffle, rewritten = f"{m['lead']}play {m['body']}", True, True
+    return t, mode, shuffle, rewritten
+
+
+def wish(text: str, strict: bool = False, peel: bool = True) -> Wish | None:
     """What kafka asked to play, or None if `text` isn't a plain "play <something>".
     `strict` (before the router): a verb that isn't only about music ("coloca", "put on",
     "ouvir") counts only with a sign of music: a kind ("o disco", "playlist", "algo calmo"),
-    "pra tocar" or "on Spotify" ("X do Y" alone is too common: "a foto do gato")."""
-    m = _PLAY.fullmatch(fold(text))
+    "pra tocar" or "on Spotify" ("X do Y" alone is too common: "a foto do gato"). "Add X
+    to the queue" and "shuffle X" never count by themselves ("shuffle the deck", "coloca o
+    carro na fila"): the module claims those only when Corpus has X. `peel=False` keeps
+    trailing words such as "next" in the name ("play Who's Next")."""
+    if peel:
+        t, mode, shuffle, rewritten = _extras(fold(text))
+    else:
+        t, mode, shuffle, rewritten = fold(text), "play", None, False
+    m = _PLAY.fullmatch(t)
     if not m:
         return None
     body, app = m["body"].strip(), m["app"]
     if _NOT_MUSIC.match(body) or body in _EMPTY or body in KINDS:
         return None
     found = _read(body, app)
-    marked = m["plain"] or m["to_play"] or app or found.kind != "any"
+    found.mode, found.shuffle, found.queued = mode, shuffle, rewritten
+    marked = (m["plain"] and not rewritten) or m["to_play"] or app or found.kind != "any"
     return found if marked or not strict else None
 
 

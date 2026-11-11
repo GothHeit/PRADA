@@ -28,6 +28,9 @@ The config file is TOML at $PRADA_CONFIG, or ~/.config/prada/config.toml:
 
     [memory]
     embed_model = "nomic-embed-text"
+
+    [music]
+    corpus = 'C:\\Apps\\Corpus\\Corpus.exe'     # a Windows path; see prada.music.corpus
 """
 
 import os
@@ -297,3 +300,23 @@ def memory_settings() -> MemorySettings:
             f"[memory] min_similarity in {config_path()} must be a number from -1 to 1"
         )
     return MemorySettings(embed_model=model.strip(), min_similarity=similarity)
+
+
+@dataclass(frozen=True)
+class MusicSettings:
+    """The `[music]` table: where Corpus is."""
+
+    corpus: str = ""  # Corpus.exe, as a Windows path ("C:\\Apps\\Corpus\\Corpus.exe"); "" = PATH
+
+
+def music_settings() -> MusicSettings:
+    """Resolve the music settings from `[music]` in the config file (defaults otherwise)."""
+    file = load_config().get("music", {})
+    if not isinstance(file, dict):
+        raise ValueError(f"[music] in {config_path()} must be a table")
+    if unknown := sorted(set(file) - set(MusicSettings.__dataclass_fields__)):
+        raise ValueError(f"unknown [music] setting(s) in {config_path()}: {', '.join(unknown)}")
+    corpus = file.get("corpus", "")
+    if not isinstance(corpus, str):
+        raise ValueError(f"[music] corpus in {config_path()} must be a path")
+    return MusicSettings(corpus=corpus)
