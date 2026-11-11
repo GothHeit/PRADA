@@ -1,14 +1,14 @@
-"""Keyword search over what PRADA has said and kept: past turns and episode summaries.
+"""Keyword search over what PRADA has said and kept: past turns, episode summaries, facts.
 
 `KeywordIndex` is SQLite FTS5 (stdlib, no dependency) with accent- and case-insensitive
 matching ("acao" finds "ação"). Each turn is indexed with its episode's summary beside it
 (the `topic` column), so a vague line like "ok, let's do that" is found by what the
-conversation was about; the stored turn itself never changes. Its three methods, `add_turns`, `add_summary` and
-`search(query, limit) -> list[Hit]`, are the whole interface `prada.memory` uses, so an
-embedding index can replace or sit beside it later without touching the callers.
+conversation was about; the stored turn itself never changes. A fact is indexed with the
+person's own words beside it. `prada.memory` merges these hits with the vector index's
+(prada.vectors), which finds what shares no word with the query.
 
 Limits: matching is by whole word, so there is no stemming ("running" does not find "run")
-and no synonyms; that is what a vector index is for. Chinese and Japanese have no spaces, so
+and no synonyms; that is what the vector index is for. Chinese and Japanese have no spaces, so
 every kana/kanji character is indexed on its own and a query run is matched as a phrase of
 consecutive characters: "日本語" finds "日本語を勉強" but a word written in other kana or kanji
 is a different phrase, and particles are not removed. Hangul and Thai are not special-cased.
@@ -49,15 +49,15 @@ TOPIC_WEIGHT = 0.5  # bm25 weight of a turn's topic against its own words (1.0)
 
 @dataclass
 class Hit:
-    kind: str  # "turn" or "summary"
-    ref: int  # memory_turn.id, or the episode id for a summary
+    kind: str  # "turn", "summary" or "fact"
+    ref: int  # memory_turn.id, the episode id for a summary, memory_fact.id for a fact
     episode: int
     ts: float
     role: str  # "user" / "assistant"; "" for a summary
     text: str
     matched: int  # how many distinct query terms it contains (a turn: with its topic)
     own: int  # how many of those are in `text` itself (0 = found by its topic only)
-    rank: float  # bm25, lower is better
+    rank: float  # bm25, lower is better (0 for a hit found by meaning only)
 
 
 def fold(text: str) -> str:
@@ -102,6 +102,7 @@ class KeywordIndex:
             for table, columns in (
                 ("memory_turn_fts", "content, topic"),
                 ("memory_summary_fts", "content"),
+                ("memory_fact_fts", "content"),
             ):
                 db.execute(
                     f"CREATE VIRTUAL TABLE IF NOT EXISTS {table} "
@@ -137,6 +138,11 @@ class KeywordIndex:
                 "AND model IS NOT 'fake' AND id NOT IN (SELECT rowid FROM memory_summary_fts)"
             ).fetchall():
                 self.add_summary(row[0], row[1])
+            for row in self.db.execute(
+                "SELECT id, fact, quote FROM memory_fact WHERE model IS NOT 'fake' "
+                "AND id NOT IN (SELECT rowid FROM memory_fact_fts)"
+            ).fetchall():
+                self.add_fact(row[0], row[1], row[2])
 
     def add_turns(self, rows) -> None:
         """`rows`: (memory_turn id, content) pairs of a conversation still going (no topic
@@ -170,6 +176,14 @@ class KeywordIndex:
                     (episode, fold(summary)),
                 )
 
+    def add_fact(self, fact: int, text: str, quote: str) -> None:
+        """Index a fact with the person's words. Call inside the caller's transaction."""
+        if self.available:
+            self.db.execute(
+                "INSERT INTO memory_fact_fts (rowid, content) VALUES (?, ?)",
+                (fact, fold(f"{text} {quote}")),
+            )
+
     def search(self, query: str, limit: int) -> list[Hit]:
         """Best `limit` matches for the terms of `query`: most distinct terms first, then
         terms in the hit's own text, then bm25 (a turn's topic weighs `TOPIC_WEIGHT`). Anything
@@ -198,6 +212,14 @@ class KeywordIndex:
                 limit,
                 wanted,
             ),
+            *self._run(
+                "SELECT 'fact', m.id, m.episode, m.ts, 'user', m.fact, f.content, '', f.rank "
+                "FROM memory_fact_fts f JOIN memory_fact m ON m.id = f.rowid "
+                "WHERE memory_fact_fts MATCH ? ORDER BY f.rank LIMIT ?",
+                match,
+                limit,
+                wanted,
+            ),
         ]
         hits.sort(key=lambda h: (-h.matched, -h.own, h.rank))
         return hits[:limit]
@@ -214,9 +236,10 @@ class KeywordIndex:
 
 def _found(folded: str, wanted: list[str]) -> set[str]:
     """The terms of `wanted` in an indexed text, accents ignored on both sides as the index does."""
-    words = " " + " ".join(_TOKEN.findall(_plain(folded.lower()))) + " "
-    return {t for t in wanted if f" {_plain(t)} " in words}
+    words = " " + " ".join(_TOKEN.findall(plain(folded.lower()))) + " "
+    return {t for t in wanted if f" {plain(t)} " in words}
 
 
-def _plain(text: str) -> str:
+def plain(text: str) -> str:
+    """`text` without accents."""
     return "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn")

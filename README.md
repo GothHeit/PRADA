@@ -19,6 +19,7 @@ You need Python 3.11+ and [Ollama](https://ollama.com).
 
 ```bash
 ollama pull gemma4:12b
+ollama pull nomic-embed-text   # her memory search by meaning
 
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
