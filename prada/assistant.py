@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from prada import persona, status
 from prada.actions import answer as yes_no
-from prada.honesty import asks_action, claims_action
+from prada.honesty import asks_action, claims_action, offers_action
 from prada.module import Context, Module, Reply, Request
 from prada.stream import FieldText, Sentences
 
@@ -136,9 +136,13 @@ class AssistantModule(Module):
         )
         # Only a request for something to be done gets the claim guard: a claim anywhere
         # else is chat ("I wrote you a poem"), and checking it would cut her off for nothing.
-        # A plain yes or no counts too: a yes to her own offer ("want me to pause it?") is a
-        # request, and the node has already run any action really held for that yes.
-        guard = asks_action(request.text) or yes_no(request.text) is not None
+        # A plain yes or no to her own offer ("want me to pause it?") counts too: the node has
+        # already run any action really held for that yes. An "ok" after chat doesn't, so
+        # "you're all set!" there is never turned into "I can't do that".
+        said = next((t["content"] for t in reversed(ctx.turns) if t["role"] == "assistant"), "")
+        guard = asks_action(request.text) or (
+            yes_no(request.text) is not None and offers_action(said)
+        )
         gate = _Gate(ctx.say, guard)
         answer = self._answer(messages, ctx, gate)
         if answer is None:

@@ -40,6 +40,7 @@ _ASK = re.compile(
     re.IGNORECASE,
 )
 _SENTENCE = re.compile(r"[^.!?]*(?:[.!?]+|$)")
+_VERB = re.compile(r"\b(?:" + _VERBS + r")\b", re.IGNORECASE)
 
 
 def asks_action(text: str) -> bool:
@@ -54,3 +55,15 @@ def claims_action(text: str) -> bool:
     text = text.replace("’", "'")
     sentences = (m.group() for m in _SENTENCE.finditer(text))
     return any(_CLAIM.search(s) for s in sentences if s.strip() and not s.rstrip().endswith("?"))
+
+
+def offers_action(text: str) -> bool:
+    """True if her reply `text` ends asking whether to do something: "Want me to pause it?",
+    "Should I set a reminder?"; False for a question about them ("Did you sleep well?")."""
+    text = text.replace("’", "'")
+    sentences = [m.group() for m in _SENTENCE.finditer(text) if m.group().strip()]
+    return (
+        bool(sentences)
+        and sentences[-1].rstrip().endswith("?")
+        and bool(_VERB.search(sentences[-1]))
+    )
