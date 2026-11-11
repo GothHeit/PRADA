@@ -116,11 +116,32 @@ max_pages = 3                         # results she may read per question (0-3)
 sources = ["web", "reddit", "github"] # the ones she may use
 ```
 
-## Music controls
+## Music
 
-She pauses, resumes and skips whatever plays in Spotify, Corpus or any other player that shows up in Windows' media controls (the overlay with the volume keys), and says what's playing. Plain commands skip the model, in English or Portuguese: "pause", "next song", "go back a song", "what's playing?", "pausa", "próxima", "que música é essa?"; add "on Spotify" / "no Corpus" to pick a player. She says it happened only after the player shows the change.
+She plays songs by name on Spotify (below), and pauses, resumes and skips whatever plays in Spotify, Corpus or any other player that shows up in Windows' media controls (the overlay with the volume keys), and says what's playing. Plain commands skip the model, in English or Portuguese: "pause", "next song", "go back a song", "what's playing?", "pausa", "próxima", "que música é essa?"; add "on Spotify" / "no Corpus" to pick a player. She says it happened only after the player shows the change.
 
 The node reaches Windows through WSL interop: it keeps one `powershell.exe` running with a small script (`prada/music/bridge.ps1`, run inline, so the execution policy doesn't matter). Nothing to install or configure. `prada music` prints what Windows sees, to check the bridge.
+
+### Play by name on Spotify
+
+"Play Muse Space Dementia", "play the album Origin of Symmetry", "play my chill playlist", "play something calm", "toca Evidências do Chitãozinho e Xororó", "bota pra tocar Muse": she reads the request in code (no model call), searches Spotify, starts the closest match and says what she put on and where, only after Spotify shows it playing. A bare name ("play Muse") plays the artist; "something calm" plays the best Spotify playlist for the mood. If nothing comes close she says so instead of playing something random.
+
+It plays on the Spotify device that is already playing, else this PC's Spotify app, else any of your devices (Spotify Connect: phone, speakers). If none is open, she opens the Spotify app (Store or classic) and waits up to 20 s for it.
+
+This uses Spotify's official Web API (needs Premium): her one deliberate cloud call, since the music lives on Spotify anyway. Nothing is patched. Set it up once:
+
+1. On [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard), log in with your Spotify account and **Create app**: any name and description, **Redirect URI** `http://127.0.0.1:7725/callback` (exactly this; Spotify doesn't accept `localhost`), and tick **Web API**. Save.
+2. Open the app's **Settings** and copy its **Client ID** (no secret is needed) into your config:
+
+   ```toml
+   [spotify]
+   client_id = "0123456789abcdef0123456789abcdef"
+   ```
+
+3. Where the node runs (WSL), run `prada music login`. It opens Spotify's consent page in your browser (or prints the address); click **Agree**, and the page says PRADA is logged in. The refresh token is saved in `spotify-token.json` next to the config file, readable only by you; never commit it. If Spotify says the user isn't registered, add your account's email under **User Management** in the app's settings and log in again.
+4. `prada music spotify` shows the login, your devices and what plays. Restart `prada node`.
+
+To log out, delete `spotify-token.json` (and remove the app's access at spotify.com/account/apps).
 
 While `prada node` runs, every track Spotify and Corpus play is logged in her database (table `music_play`: title, artist, album, seconds listened, finished / skipped / stopped, and whether she started it), for learning your taste later. It stays on this computer.
 

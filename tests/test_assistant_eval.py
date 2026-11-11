@@ -35,7 +35,7 @@ def oracle(cases):
 
 def test_evalset_is_well_formed():
     assert {c.category for c in CASES} == set(assistant_eval.CATEGORIES)
-    names = {"assistant", "tutor", "wake", "notes", "web"}
+    names = {"assistant", "tutor", "wake", "notes", "web", "music"}
     assert all(c.module in names for c in CASES if c.module)
     assert any(c.offer for c in CASES) and any(c.offer is False for c in CASES)
     assert any(c.memory for c in CASES) and any(c.before for c in CASES)

@@ -1,10 +1,16 @@
-"""The music module: pause, resume, skip and "what's playing?" for Spotify and Corpus.
+"""The music module: "play X" on Spotify, and pause, resume, skip and "what's playing?" for
+Spotify and Corpus.
 
 Plain commands ("pause", "next song", "próxima", "que música é essa?") are matched in
 code, so they skip the router and never wait for the model. Each button press is a typed
 SAFE action: the node presses it through Windows' media controls and checks the player
 really changed (paused, playing, a new track) before she says so. "What's playing?" is
 answered from the players only, never guessed.
+
+"Play Muse Space Dementia" / "toca Evidências" is read in code too (`prada.music.play`) and
+becomes one SAFE `music.play` action: the node searches Spotify through its Web API
+(`prada.music.spotify`), picks the closest result, starts it on one of kafka's devices and
+checks Spotify really plays it. No model call, so it starts in about a second.
 
 While the node runs (`start`), a watcher logs every track played to `music_play`.
 """
@@ -18,11 +24,16 @@ from prada import llm
 from prada.actions import Action, ActionFailed, Executor
 from prada.module import Context, Module, Reply, Request
 from prada.music.bridge import BridgeError, FakeBridge, Player, Status, WindowsBridge
+from prada.music.play import Wish, fold, pick, tokens, wish
 from prada.music.playlog import MIGRATIONS, PlayLog, Watcher
+from prada.music.spotify import FakeSpotify, Hit, Now, SpotifyApi, SpotifyError, choose, open_app
 from prada.store import open_store
 
 VERIFY = 3.0  # seconds to wait for the player to show the change
 VERIFY_STEP = 0.15
+LAUNCH = 20.0  # seconds Spotify may take to open and show up as a device
+SPOTIFY_STEP = 0.5  # seconds between looks at Spotify (each is a Web API call)
+SPOTIFY_APP = "Spotify.exe"  # Spotify's app id in Windows' media controls
 
 # Matched on lower-case text without accents or punctuation (see `_norm`).
 _OBJ = r"(?:(?:the|this|that|a|essa|esta|esse|o) )?(?:music|song|track|tune|musica|faixa|som)"
@@ -214,6 +225,83 @@ class PreviousExecutor(_PressExecutor):
         return f"Went back to {after.describe()}."
 
 
+class Play(Action):
+    kind: Literal["music.play"] = "music.play"
+    query: str  # what kafka asked for, folded
+    want: str = "any"  # any, track, artist, album, playlist, mood
+
+    def describe(self) -> str:
+        return f"play {self.query} on Spotify"
+
+
+def _plays(hit: Hit, now: Now) -> bool:
+    """Spotify plays `hit`: the same uri or context, or another release of the same track
+    (same title and a shared artist)."""
+    same = now.uri == hit.uri or now.context == hit.uri
+    relinked = (
+        hit.kind == "track"
+        and fold(now.title) == fold(hit.name)
+        and bool(tokens(now.artists) & tokens(hit.by))
+    )
+    return now.playing and (same or relinked)
+
+
+class PlayExecutor(Executor):
+    """Searches Spotify, picks the closest result, starts it on a device, then reads back
+    what plays. Opens Spotify first when none of kafka's devices is open."""
+
+    action = Play
+
+    def __init__(self, module: "MusicModule"):
+        self._module = module
+
+    def run(self, action: Play, ctx: Context) -> dict:
+        api = self._module.spotify()
+        if not api.ready():
+            raise ActionFailed("I'm not logged in to Spotify yet; run `prada music login`")
+        try:
+            hit = pick(Wish(action.query, action.want), api.search(action.query))
+            if hit is None:
+                raise ActionFailed(f'Spotify has nothing close to "{action.query}"')
+            device = choose(api.devices())
+            if device is None:
+                api.open_app()
+                deadline = time.monotonic() + self._module.launch
+                devices = []
+                while device is None and time.monotonic() < deadline:
+                    time.sleep(self._module.step)
+                    devices = api.devices()
+                    device = choose(devices)
+                device = device or choose(devices, anywhere=True)
+                if device is None:
+                    raise ActionFailed("Spotify didn't show up as a device after I opened it")
+            self._module.pressed(SPOTIFY_APP)
+            api.play(hit, device)
+            now = api.now()
+            deadline = time.monotonic() + self._module.verify
+            while not _plays(hit, now) and time.monotonic() < deadline:
+                time.sleep(self._module.step)
+                now = api.now()
+        except SpotifyError as e:
+            raise ActionFailed(str(e)) from e
+        return {"hit": vars(hit), "now": vars(now)}
+
+    def check(self, action: Play, result: dict, ctx: Context) -> None:
+        hit, now = Hit(**result["hit"]), Now(**result["now"])
+        if not _plays(hit, now):
+            raise ActionFailed(f"Spotify didn't start {hit.describe()}")
+
+    def done(self, action: Play, result: dict) -> str:
+        hit, now = Hit(**result["hit"]), Now(**result["now"])
+        where = f" on {now.device}" if now.device else ""
+        return f"Playing {hit.describe()}{where}."
+
+
+class _RealSpotify(SpotifyApi):
+    def open_app(self) -> None:
+        open_app()
+
+
 _ACTIONS = {"pause": Pause, "resume": Resume, "next": Next, "previous": Previous}
 
 
@@ -259,23 +347,35 @@ def now_playing(status: Status, app: str | None) -> str:
 class MusicModule(Module):
     name = "music"
     description = (
-        "Pauses, resumes and skips the music playing on the PC (Spotify, Corpus) and says "
-        "what song is playing. Not for playing a particular song or artist."
+        "Plays a song, artist, album or playlist on Spotify, pauses, resumes and skips the "
+        "music playing on the PC (Spotify, Corpus) and says what song is playing."
     )
     migrations = MIGRATIONS
     memory_note = "[music controls]"
 
-    def __init__(self, bridge=None, verify: float = VERIFY):
-        """`bridge` replaces Windows' media controls (tests); `verify` = seconds to wait for
-        a player to show a change."""
+    def __init__(
+        self,
+        bridge=None,
+        verify: float = VERIFY,
+        spotify=None,
+        launch: float = LAUNCH,
+        step: float = SPOTIFY_STEP,
+    ):
+        """`bridge` replaces Windows' media controls and `spotify` the Spotify Web API
+        (tests); `verify` = seconds to wait for a player to show a change, `launch` = for
+        Spotify to show up as a device after she opens it, `step` = between looks."""
         self._bridge = bridge
+        self._spotify = spotify
         self.verify = verify
+        self.launch = launch
+        self.step = step
         self._log: PlayLog | None = None
         self.executors = [
             PauseExecutor(self),
             ResumeExecutor(self),
             NextExecutor(self),
             PreviousExecutor(self),
+            PlayExecutor(self),
         ]
 
     def bridge(self):
@@ -283,32 +383,44 @@ class MusicModule(Module):
             self._bridge = FakeBridge() if llm.fake_enabled() else WindowsBridge()
         return self._bridge
 
+    def spotify(self):
+        if self._spotify is None:
+            self._spotify = FakeSpotify() if llm.fake_enabled() else _RealSpotify()
+        return self._spotify
+
     def start(self, db_path) -> None:
         """Log what plays while the node runs (real players only, never the fake ones)."""
-        if self._bridge is not None or llm.fake_enabled():
-            return
-        bridge = self.bridge()
-        self._log = PlayLog(open_store(self.name, MIGRATIONS, db_path))
-        Watcher(bridge.status, self._log).start()
+        if self._bridge is None and not llm.fake_enabled():
+            bridge = self.bridge()
+            self._log = PlayLog(open_store(self.name, MIGRATIONS, db_path))
+            Watcher(bridge.status, self._log).start()
 
     def pressed(self, app: str) -> None:
         if self._log is not None:
             self._log.mark(app, time.time())
 
     def wants(self, text: str) -> bool:
-        return command(text) is not None
+        return command(text) is not None or wish(text, strict=True) is not None
 
     def accepts(self, text: str) -> bool:
-        return command(text) is not None
+        return command(text) is not None or wish(text) is not None
 
     def handle(self, request: Request, ctx: Context) -> Reply:
         found = command(request.text)
         if found is None:
-            return Reply(
-                module=self.name,
-                text="I can pause, resume or skip what's playing, or tell you what it is; "
-                "I can't pick songs yet.",
-            )
+            asked = wish(request.text)
+            if asked is None:
+                return Reply(
+                    module=self.name,
+                    text="I can play something on Spotify if you tell me what, pause, resume "
+                    "or skip what's playing, or tell you what it is.",
+                )
+            if asked.app == "corpus":
+                return Reply(
+                    module=self.name,
+                    text="I can't pick songs in Corpus yet, only on Spotify.",
+                )
+            return Reply(module=self.name, actions=[Play(query=asked.query, want=asked.kind)])
         verb, app = found
         try:
             status = self.bridge().status()

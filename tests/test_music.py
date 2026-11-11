@@ -66,7 +66,7 @@ def test_commands(text, verb, app):
         "stop",  # also "stop talking" or a no to her question
         "continue",
         "go back",
-        "play Muse Space Dementia",  # Phase 3
+        "play Muse Space Dementia",  # a wish to play, see test_music_play
         "next week I travel to Lisbon",
         "what is this?",
         "pause for a second, I need to think",

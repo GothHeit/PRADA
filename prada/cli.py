@@ -50,7 +50,12 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--steps", type=int, help="training steps (default 50000)")
     train.add_argument("--out", help="folder or .onnx path for the model (default: voice models)")
 
-    sub.add_parser("music", help="show what Windows' media controls see (Spotify, Corpus, ...)")
+    music = sub.add_parser(
+        "music", help="show what Windows' media controls see (Spotify, Corpus, ...)"
+    )
+    music_sub = music.add_subparsers(dest="music_command")
+    music_sub.add_parser("login", help="log in to Spotify once, so she can play songs by name")
+    music_sub.add_parser("spotify", help="show the Spotify login, devices and what plays")
 
     persona = sub.add_parser("persona", help="show who PRADA is and where her persona file is")
     persona_sub = persona.add_subparsers(dest="persona_command")
@@ -126,6 +131,8 @@ def main(argv: list[str] | None = None) -> int:
         from prada.eval import compare
 
         return compare(args.compare)
+    elif args.command == "music" and args.music_command:
+        return _spotify(args.music_command)
     elif args.command == "music":
         return _music()
     elif args.command == "eval" and args.suite == "assistant":
@@ -168,6 +175,34 @@ def _music() -> int:
         print(
             f"{mark} {p.name} [{p.app}] {p.state}: {p.describe()} ({p.album or 'no album'}; {where})"
         )
+    return 0
+
+
+def _spotify(command: str) -> int:
+    from prada.music import spotify
+
+    try:
+        api = spotify.SpotifyApi()
+        if command == "login":
+            spotify.login(api)
+            print(f"Logged in to Spotify; the token is in {api.token_path}.")
+            return 0
+        if not api.ready():
+            print("Not logged in to Spotify: run `prada music login`.")
+            return 1
+        devices = api.devices()
+        now = api.now()
+    except (ValueError, OSError, spotify.SpotifyError) as e:
+        print(f"prada: {e}", file=sys.stderr)
+        return 1
+    print("Logged in to Spotify.")
+    if not devices:
+        print("No Spotify device is open.")
+    for d in devices:
+        print(f"{'*' if d.active else ' '} {d.name} ({d.kind})")
+    if now.title:
+        state = "playing" if now.playing else "paused"
+        print(f"{state}: {now.title} by {now.artists} ({now.album}) on {now.device}")
     return 0
 
 

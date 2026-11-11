@@ -22,6 +22,9 @@ The config file is TOML at $PRADA_CONFIG, or ~/.config/prada/config.toml:
 
     [web]
     github_token = "github_pat_..."
+
+    [spotify]
+    client_id = "0123456789abcdef..."   # see prada.music.spotify
 """
 
 import os
